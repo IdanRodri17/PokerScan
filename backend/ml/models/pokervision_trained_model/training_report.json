@@ -1,0 +1,41 @@
+{
+  "training_info": {
+    "model": "yolov8n",
+    "epochs": 15,
+    "batch_size": 16,
+    "learning_rate": 0.01,
+    "training_time_hours": 0.5157787435584598,
+    "training_time_minutes": 30.946724613507588,
+    "dataset_size": {
+      "train": 14000,
+      "val": 4000,
+      "test": 2000,
+      "total": 20000
+    }
+  },
+  "performance_metrics": {
+    "map50": 0.9845429253842479,
+    "map50_95": 0.9155850475307731,
+    "precision": 0.9666012797419937,
+    "recall": 0.9720847702774638,
+    "f1_score": 0.9693352701005591,
+    "avg_inference_time_ms": 8.52900505065918,
+    "fps": 117.24697008154699
+  },
+  "target_achievement": {
+    "map50_target": 0.9,
+    "map50_achieved": true,
+    "map50_difference": 0.0845429253842479,
+    "speed_target_ms": 100.0,
+    "speed_achieved": true,
+    "speed_difference": 91.47099494934082
+  },
+  "exported_models": {
+    "pytorch": "exported_models/poker_cards_best.pt",
+    "onnx": "exported_models/poker_cards_best.onnx",
+    "torchscript": "exported_models/poker_cards_best.torchscript"
+  },
+  "timestamp": "2025-08-21 08:13:26",
+  "gpu_used": "T4",
+  "platform": "Google Colab Pro"
+}

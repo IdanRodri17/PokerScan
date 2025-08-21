@@ -1,0 +1,130 @@
+# PokerVision YOLOv8 Model Configuration
+
+# Model Settings
+model:
+  name: "yolov8n"  # Can be yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
+  input_size: 640
+  confidence_threshold: 0.3
+  iou_threshold: 0.45
+  max_detections: 300
+  device: "auto"  # auto, cpu, or cuda
+
+# Training Settings
+training:
+  epochs: 100
+  batch_size: 16
+  learning_rate: 0.01
+  optimizer: "SGD"
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3
+  patience: 50
+  save_period: 10
+
+# Dataset Settings
+dataset:
+  name: "playing_cards_detection"
+  kaggle_dataset: "andy8744/playing-cards-object-detection-dataset"
+  train_split: 0.8
+  val_split: 0.15
+  test_split: 0.05
+  
+# Data Augmentation
+augmentation:
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.0
+
+# Card Classes (52 playing cards)
+classes:
+  # Spades
+  0: "As"   # Ace of Spades
+  1: "2s"   # 2 of Spades
+  2: "3s"   # 3 of Spades
+  3: "4s"   # 4 of Spades
+  4: "5s"   # 5 of Spades
+  5: "6s"   # 6 of Spades
+  6: "7s"   # 7 of Spades
+  7: "8s"   # 8 of Spades
+  8: "9s"   # 9 of Spades
+  9: "Ts"   # 10 of Spades
+  10: "Js"  # Jack of Spades
+  11: "Qs"  # Queen of Spades
+  12: "Ks"  # King of Spades
+  
+  # Hearts
+  13: "Ah"  # Ace of Hearts
+  14: "2h"  # 2 of Hearts
+  15: "3h"  # 3 of Hearts
+  16: "4h"  # 4 of Hearts
+  17: "5h"  # 5 of Hearts
+  18: "6h"  # 6 of Hearts
+  19: "7h"  # 7 of Hearts
+  20: "8h"  # 8 of Hearts
+  21: "9h"  # 9 of Hearts
+  22: "Th"  # 10 of Hearts
+  23: "Jh"  # Jack of Hearts
+  24: "Qh"  # Queen of Hearts
+  25: "Kh"  # King of Hearts
+  
+  # Diamonds
+  26: "Ad"  # Ace of Diamonds
+  27: "2d"  # 2 of Diamonds
+  28: "3d"  # 3 of Diamonds
+  29: "4d"  # 4 of Diamonds
+  30: "5d"  # 5 of Diamonds
+  31: "6d"  # 6 of Diamonds
+  32: "7d"  # 7 of Diamonds
+  33: "8d"  # 8 of Diamonds
+  34: "9d"  # 9 of Diamonds
+  35: "Td"  # 10 of Diamonds
+  36: "Jd"  # Jack of Diamonds
+  37: "Qd"  # Queen of Diamonds
+  38: "Kd"  # King of Diamonds
+  
+  # Clubs
+  39: "Ac"  # Ace of Clubs
+  40: "2c"  # 2 of Clubs
+  41: "3c"  # 3 of Clubs
+  42: "4c"  # 4 of Clubs
+  43: "5c"  # 5 of Clubs
+  44: "6c"  # 6 of Clubs
+  45: "7c"  # 7 of Clubs
+  46: "8c"  # 8 of Clubs
+  47: "9c"  # 9 of Clubs
+  48: "Tc"  # 10 of Clubs
+  49: "Jc"  # Jack of Clubs
+  50: "Qc"  # Queen of Clubs
+  51: "Kc"  # King of Clubs
+
+# Spatial Analysis Settings
+spatial:
+  clustering_method: "dbscan"  # dbscan, kmeans, or agglomerative
+  eps: 0.1  # DBSCAN epsilon parameter
+  min_samples: 1  # DBSCAN min samples
+  community_card_threshold: 0.3  # Distance threshold for community cards
+  player_hand_size: 2  # Expected cards per player hand
+  max_players: 3  # Maximum number of players to detect
+
+# Performance Settings
+performance:
+  target_map50: 0.90  # Target mAP@50 accuracy
+  target_inference_time: 100  # Target inference time in milliseconds
+  max_image_size: 10485760  # Maximum image size in bytes (10MB)
+
+# Logging and Monitoring
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/poker_vision.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5

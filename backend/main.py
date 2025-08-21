@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from io import BytesIO
 
-from models.schemas import ImageUploadResponse, HealthCheckResponse, ErrorResponse
+from models.schemas import ImageUploadResponse, HealthCheckResponse, ErrorResponse, ModelStatusResponse
 from services.image_processor import ImageProcessor
 
 # Configure logging
@@ -38,11 +38,15 @@ image_processor = ImageProcessor()
 
 @app.get("/health", response_model=HealthCheckResponse)
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with model status"""
+    # Get model status
+    model_status = image_processor.get_model_status()
+    
     return HealthCheckResponse(
         status="healthy",
         timestamp=datetime.now(),
-        version="1.0.0"
+        version="1.0.0",
+        model_status=ModelStatusResponse(**model_status)
     )
 
 @app.post("/upload", response_model=ImageUploadResponse)
@@ -69,10 +73,17 @@ async def upload_image(file: UploadFile = File(...)):
             )
         
         # Process the image
-        detected_cards, processing_time = image_processor.process_image(
+        detection_results, processing_time = image_processor.process_image(
             BytesIO(content), 
             file.filename
         )
+        
+        # Extract simple card names for backward compatibility
+        simple_card_names = []
+        for section in detection_results:
+            if section.get("type") in ["community_cards", "player_hand", "unassigned_cards"]:
+                cards = section.get("cards", [])
+                simple_card_names.extend([card["name"] for card in cards])
         
         logger.info(f"Successfully processed image: {file.filename}")
         
@@ -81,7 +92,8 @@ async def upload_image(file: UploadFile = File(...)):
             message="Image processed successfully",
             filename=file.filename,
             timestamp=datetime.now(),
-            cards_detected=detected_cards,
+            detection_results=detection_results,
+            cards_detected=simple_card_names,  # Backward compatibility
             processing_time=processing_time
         )
         
@@ -92,6 +104,19 @@ async def upload_image(file: UploadFile = File(...)):
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"
+        )
+
+@app.get("/model/status", response_model=ModelStatusResponse)
+async def get_model_status():
+    """Get detailed model status information"""
+    try:
+        status = image_processor.get_model_status()
+        return ModelStatusResponse(**status)
+    except Exception as e:
+        logger.error(f"Failed to get model status: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get model status: {str(e)}"
         )
 
 @app.exception_handler(HTTPException)

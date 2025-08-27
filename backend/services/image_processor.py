@@ -7,16 +7,17 @@ from typing import List, Tuple, Dict, Optional
 import logging
 from io import BytesIO
 
+logger = logging.getLogger(__name__)
+
 # Import ML components
 try:
     from ml.card_detector import create_card_detector, YOLOv8CardDetector
     from ml.spatial_analyzer import PokerSpatialAnalyzer
+    from ml.hand_evaluator import create_hand_evaluator
     ML_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"ML components not available: {e}")
     ML_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
 
 class ImageProcessor:
     """Enhanced service for processing poker card images with YOLOv8"""
@@ -33,18 +34,50 @@ class ImageProcessor:
     def _initialize_ml_components(self) -> bool:
         """Initialize ML components (card detector and spatial analyzer)"""
         try:
-            # Try to find a trained model
+            # Try to find a trained model with fallback options
             model_dir = Path("ml/models")
-            model_files = list(model_dir.glob("*.pt")) if model_dir.exists() else []
             
-            if model_files:
-                # Use the first available model
-                model_path = str(model_files[0])
-                logger.info(f"Loading trained model: {model_path}")
-                self.card_detector = create_card_detector(model_path=model_path)
+            if model_dir.exists():
+                # Priority order: .pt (PyTorch), .onnx (ONNX), pretrained
+                pt_files = list(model_dir.glob("*.pt"))
+                onnx_files = list(model_dir.glob("*.onnx"))
+                
+                model_loaded = False
+                
+                # First try PyTorch models
+                for model_file in pt_files:
+                    try:
+                        model_path = str(model_file)
+                        logger.info(f"Loading trained PyTorch model: {model_path}")
+                        self.card_detector = create_card_detector(model_path=model_path)
+                        model_loaded = True
+                        logger.info("✅ PyTorch model loaded successfully")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to load PyTorch model {model_file}: {e}")
+                        continue
+                
+                # If PyTorch failed, try ONNX models
+                if not model_loaded and onnx_files:
+                    for onnx_file in onnx_files:
+                        try:
+                            logger.info(f"Trying ONNX model as fallback: {onnx_file}")
+                            # Note: ONNX loading would need separate implementation
+                            # For now, log the attempt and continue to pretrained
+                            logger.warning("ONNX model support not yet implemented, using pretrained")
+                            break
+                        except Exception as e:
+                            logger.warning(f"ONNX model loading failed: {e}")
+                            continue
+                
+                # If all custom models failed, use pretrained
+                if not model_loaded:
+                    logger.info("Custom model loading failed, using pretrained YOLOv8")
+                    self.card_detector = create_card_detector()
+                    model_loaded = True
             else:
                 # Use pretrained YOLOv8 for initial testing
-                logger.info("No trained model found, using pretrained YOLOv8")
+                logger.info("No trained model directory found, using pretrained YOLOv8")
                 self.card_detector = create_card_detector()
             
             # Initialize spatial analyzer
@@ -53,6 +86,9 @@ class ImageProcessor:
                 self.spatial_analyzer = PokerSpatialAnalyzer(str(config_path))
             else:
                 self.spatial_analyzer = PokerSpatialAnalyzer()
+            
+            # Initialize hand evaluator
+            self.hand_evaluator = create_hand_evaluator()
             
             logger.info("ML components initialized successfully")
             return True
@@ -119,14 +155,18 @@ class ImageProcessor:
             List of structured detection results
         """
         try:
-            # Step 1: Detect individual cards
-            detections, inference_time = self.card_detector.detect_cards_from_pil(image)
+            # Step 1: Detect individual cards with poker optimization (duplicate removal)
+            detections, inference_time, processing_report = self.card_detector.detect_cards_from_pil_poker(image)
             
             if not detections:
                 logger.info("No cards detected by ML model")
                 return []
             
-            logger.info(f"ML model detected {len(detections)} cards in {inference_time:.3f}s")
+            logger.info(f"ML model detected {len(detections)} unique cards in {inference_time:.3f}s")
+            if processing_report.get('spatial_duplicates_removed', 0) > 0:
+                logger.info(f"Removed {processing_report['spatial_duplicates_removed']} spatial duplicates")
+            if processing_report.get('card_duplicates_removed', 0) > 0:
+                logger.info(f"Removed {processing_report['card_duplicates_removed']} card duplicates (poker rule)")
             
             # Step 2: Perform spatial analysis
             table_analysis = self.spatial_analyzer.analyze_table(detections, image_shape)
@@ -213,6 +253,9 @@ class ImageProcessor:
             
             results.append(unassigned_section)
         
+        # Evaluate poker hands
+        hand_evaluations = self._evaluate_poker_hands(table_analysis)
+        
         # Add analysis metadata
         analysis_summary = {
             "type": "analysis_summary",
@@ -220,12 +263,86 @@ class ImageProcessor:
             "confidence_score": table_analysis.confidence_score,
             "game_stage": table_analysis.community_cards.stage.value if table_analysis.community_cards else "preflop",
             "player_count": len(table_analysis.player_hands),
+            "hand_evaluations": hand_evaluations,
             "metadata": table_analysis.analysis_metadata
         }
         
         results.append(analysis_summary)
         
         return results
+    
+    def _evaluate_poker_hands(self, table_analysis) -> Dict:
+        """
+        Evaluate poker hands for all players using detected cards
+        
+        Args:
+            table_analysis: PokerTableAnalysis object
+            
+        Returns:
+            Dictionary containing hand evaluations for all players
+        """
+        hand_evaluations = {
+            "community_cards_available": False,
+            "player_hands": {},
+            "best_possible_hand": None
+        }
+        
+        try:
+            # Get community cards
+            community_card_names = []
+            if table_analysis.community_cards and table_analysis.community_cards.cards:
+                community_card_names = [card.card_name for card in table_analysis.community_cards.cards]
+                hand_evaluations["community_cards_available"] = True
+            
+            # Evaluate each player's hand
+            for i, player_hand in enumerate(table_analysis.player_hands):
+                player_id = player_hand.player_id or f"player_{i+1}"
+                hole_card_names = [card.card_name for card in player_hand.cards]
+                
+                if len(hole_card_names) >= 2:  # Need at least 2 hole cards
+                    if community_card_names:
+                        # Texas Hold'em style evaluation
+                        evaluation = self.hand_evaluator.evaluate_community_and_hole_cards(
+                            community_card_names, hole_card_names
+                        )
+                    else:
+                        # Evaluate just the hole cards
+                        evaluation = self.hand_evaluator.evaluate_best_hand(hole_card_names)
+                        if evaluation:
+                            evaluation = {
+                                'valid': True,
+                                'hand_rank': evaluation.hand_rank.display_name,
+                                'hand_rank_value': evaluation.hand_rank.rank_value,
+                                'hand_strength': evaluation.hand_strength,
+                                'best_cards': [str(card) for card in evaluation.cards],
+                                'hole_cards': hole_card_names,
+                                'total_cards': len(hole_card_names)
+                            }
+                        else:
+                            evaluation = {'valid': False, 'error': 'Not enough cards'}
+                    
+                    hand_evaluations["player_hands"][player_id] = evaluation
+                else:
+                    hand_evaluations["player_hands"][player_id] = {
+                        'valid': False,
+                        'error': f'Not enough hole cards: {len(hole_card_names)}'
+                    }
+            
+            # Find best possible hand if we have community cards
+            if community_card_names and len(community_card_names) >= 3:
+                best_hand = self.hand_evaluator.evaluate_best_hand(community_card_names)
+                if best_hand:
+                    hand_evaluations["best_possible_hand"] = {
+                        'hand_rank': best_hand.hand_rank.display_name,
+                        'hand_rank_value': best_hand.hand_rank.rank_value,
+                        'cards': [str(card) for card in best_hand.cards[:5]]
+                    }
+            
+        except Exception as e:
+            logger.error(f"Hand evaluation failed: {e}")
+            hand_evaluations["error"] = str(e)
+        
+        return hand_evaluations
     
     def _mock_card_detection_enhanced(self, img_array: np.ndarray) -> List[Dict]:
         """

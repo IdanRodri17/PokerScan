@@ -1,13 +1,14 @@
 # PokerVision YOLOv8 Model Configuration
 
-# Model Settings
+# Model Settings - Updated for best.pt model (YOLOv8m)
 model:
-  name: "yolov8n"  # Can be yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
-  input_size: 640
-  confidence_threshold: 0.3
-  iou_threshold: 0.45
-  max_detections: 300
+  name: "yolov8m"  # Architecture: YOLOv8m (49.7MB model)
+  input_size: 832  # Model trained on 832x832 pixels
+  confidence_threshold: 0.5   # Higher threshold for more accurate detections
+  iou_threshold: 0.45  # Optimized IOU threshold
+  max_detections: 20  # Up to 20 cards (5 community + multiple players)
   device: "auto"  # auto, cpu, or cuda
+  inference_target_ms: 6  # Target 5.7ms inference time
 
 # Training Settings
 training:

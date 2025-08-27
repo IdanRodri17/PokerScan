@@ -16,6 +16,7 @@ import cv2
 from PIL import Image
 import torch
 from ultralytics import YOLO
+from .duplicate_handler import create_duplicate_handler
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,12 @@ class YOLOv8CardDetector:
         
         # Performance tracking
         self.inference_times = []
+        
+        # Initialize duplicate handler
+        self.duplicate_handler = create_duplicate_handler(
+            iou_threshold=self.config.get('model', {}).get('iou_threshold', 0.45) * 0.7,  # More strict for duplicates
+            confidence_weight=0.8  # Prioritize confidence for poker accuracy
+        )
         
         logger.info(f"Initialized YOLOv8CardDetector with device: {self.device}")
     
@@ -114,7 +121,7 @@ class YOLOv8CardDetector:
     
     def load_model(self, model_path: Optional[str] = None) -> bool:
         """
-        Load YOLOv8 model
+        Load YOLOv8 model with PyTorch 2.6+ compatibility
         
         Args:
             model_path: Path to trained model file. If None, uses pretrained model.
@@ -123,6 +130,9 @@ class YOLOv8CardDetector:
             bool: True if model loaded successfully
         """
         try:
+            # Fix PyTorch 2.6+ weights_only issue for YOLO models
+            self._patch_torch_load()
+            
             if model_path and os.path.exists(model_path):
                 logger.info(f"Loading trained model from {model_path}")
                 self.model = YOLO(model_path)
@@ -142,6 +152,42 @@ class YOLOv8CardDetector:
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             return False
+        finally:
+            # Restore original torch.load
+            self._restore_torch_load()
+    
+    def _patch_torch_load(self):
+        """Temporarily patch torch.load to handle YOLOv8 models in PyTorch 2.6+"""
+        if hasattr(torch.serialization, 'add_safe_globals'):
+            try:
+                # Add safe globals for YOLO components
+                torch.serialization.add_safe_globals([
+                    'ultralytics.nn.tasks.DetectionModel',
+                    'ultralytics.nn.tasks.SegmentationModel', 
+                    'ultralytics.nn.tasks.ClassificationModel',
+                    'ultralytics.nn.tasks.PoseModel',
+                    'collections.OrderedDict',
+                    'torch.nn.modules.container.ModuleList',
+                    'torch.nn.modules.container.Sequential'
+                ])
+                logger.debug("Added safe globals for PyTorch 2.6+")
+            except Exception as e:
+                logger.debug(f"Could not add safe globals: {e}")
+        
+        # Store original torch.load and patch it
+        self._original_torch_load = torch.load
+        
+        def patched_load(*args, **kwargs):
+            # Force weights_only=False for model loading
+            kwargs['weights_only'] = False
+            return self._original_torch_load(*args, **kwargs)
+        
+        torch.load = patched_load
+    
+    def _restore_torch_load(self):
+        """Restore original torch.load function"""
+        if hasattr(self, '_original_torch_load'):
+            torch.load = self._original_torch_load
     
     def detect_cards(self, image: np.ndarray, return_raw: bool = False) -> Tuple[List[CardDetection], float]:
         """
@@ -209,7 +255,7 @@ class YOLOv8CardDetector:
                         
                         detections.append(detection)
             
-            logger.info(f"Detected {len(detections)} cards in {inference_time:.3f}s")
+            logger.info(f"Raw detection: {len(detections)} cards in {inference_time:.3f}s")
             
             if return_raw:
                 return detections, inference_time, results
@@ -236,6 +282,81 @@ class YOLOv8CardDetector:
             image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
         
         return self.detect_cards(image_array)
+    
+    def detect_cards_poker_optimized(self, image: np.ndarray) -> Tuple[List[CardDetection], float, Dict]:
+        """
+        Poker-optimized card detection with duplicate removal and validation
+        
+        This method is specifically designed for poker applications where:
+        - Each card can only exist once
+        - High accuracy is critical
+        - Duplicate detections must be resolved intelligently
+        
+        Args:
+            image: Input image as numpy array (BGR format)
+            
+        Returns:
+            Tuple of (unique_card_detections, inference_time, processing_report)
+        """
+        # Get raw detections
+        raw_detections, inference_time = self.detect_cards(image)
+        
+        if not raw_detections:
+            return [], inference_time, {'processing_report': 'No cards detected'}
+        
+        # Convert CardDetection objects to dictionaries for duplicate handler
+        detection_dicts = []
+        for detection in raw_detections:
+            detection_dict = {
+                'card_name': detection.card_name,
+                'confidence': detection.confidence,
+                'bbox': detection.bbox,
+                'center': list(detection.center)
+            }
+            detection_dicts.append(detection_dict)
+        
+        # Process duplicates
+        processed_detections, processing_report = self.duplicate_handler.process_detections(
+            detection_dicts,
+            remove_spatial_duplicates=True,
+            enforce_uniqueness=True
+        )
+        
+        # Convert back to CardDetection objects
+        final_detections = []
+        for detection_dict in processed_detections:
+            detection = CardDetection(
+                card_name=detection_dict['card_name'],
+                confidence=detection_dict['confidence'],
+                bbox=detection_dict['bbox'],
+                center=tuple(detection_dict['center'])
+            )
+            final_detections.append(detection)
+        
+        logger.info(f"Poker detection: {len(raw_detections)} → {len(final_detections)} cards after duplicate removal")
+        
+        # Add performance info to report
+        processing_report['inference_time_ms'] = inference_time * 1000
+        processing_report['cards_per_second'] = len(final_detections) / max(inference_time, 0.001)
+        
+        return final_detections, inference_time, processing_report
+    
+    def detect_cards_from_pil_poker(self, pil_image: Image.Image) -> Tuple[List[CardDetection], float, Dict]:
+        """
+        Poker-optimized detection from PIL Image with duplicate removal
+        
+        Args:
+            pil_image: PIL Image object
+            
+        Returns:
+            Tuple of (unique_card_detections, inference_time, processing_report)
+        """
+        # Convert PIL to numpy array (RGB to BGR)
+        image_array = np.array(pil_image)
+        if len(image_array.shape) == 3:
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+        
+        return self.detect_cards_poker_optimized(image_array)
     
     def get_performance_stats(self) -> Dict:
         """Get performance statistics"""

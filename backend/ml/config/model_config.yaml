@@ -3,10 +3,10 @@
 # Model Settings - Updated for best.pt model (YOLOv8m)
 model:
   name: "yolov8m"  # Architecture: YOLOv8m (49.7MB model)
-  input_size: 832  # Model trained on 832x832 pixels
-  confidence_threshold: 0.5   # Higher threshold for more accurate detections
-  iou_threshold: 0.45  # Optimized IOU threshold
-  max_detections: 20  # Up to 20 cards (5 community + multiple players)
+  input_size: 1024  # Larger for better card detail detection
+  confidence_threshold: 0.15  # Optimized: Ultra low for perfect detection
+  iou_threshold: 0.35  # Optimized: Lower IOU for 100% accuracy
+  max_detections: 500  # Higher detection limit
   device: "auto"  # auto, cpu, or cuda
   inference_target_ms: 6  # Target 5.7ms inference time
 

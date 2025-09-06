@@ -109,7 +109,7 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
             className="text-center mb-16"
             initial={{ opacity: 0, y: -30 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 1 }}
+            transition={{ duration: 0.6 }}
           >
             <motion.div
               className="inline-flex items-center gap-3 mb-6"
@@ -118,7 +118,7 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
               <div className="p-3 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-2xl">
                 <Eye className="w-8 h-8 text-white" />
               </div>
-              <h1 className="text-5xl md:text-7xl font-black">
+              <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl xl:text-7xl font-black">
                 <span className="bg-gradient-to-r from-yellow-400 via-yellow-300 to-orange-400 
                                bg-clip-text text-transparent">
                   PokerVision
@@ -130,16 +130,15 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
               className="text-2xl md:text-3xl text-gray-300 mb-6 font-light"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 0.5, duration: 0.8 }}
+              transition={{ delay: 0.2, duration: 0.5 }}
             >
               Instant Winner Detection
             </motion.h2>
 
             <motion.p 
               className="text-xl text-gray-400 max-w-2xl mx-auto mb-8"
-              initial={{ opacity: 0 }}
+              initial={{ opacity: 1 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 0.7, duration: 0.8 }}
             >
               Upload any poker table image and instantly see who wins with AI-powered 
               card detection and hand analysis
@@ -149,7 +148,7 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
               className="flex flex-wrap justify-center gap-4 text-sm"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 1, duration: 0.6 }}
+              transition={{ delay: 0.4, duration: 0.4 }}
             >
               {['100% Accurate', 'Instant Results', 'All Poker Variants'].map((feature, index) => (
                 <div key={feature} className="flex items-center gap-2 text-green-400">
@@ -165,7 +164,7 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
             className="mb-16"
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3, duration: 0.8 }}
+            transition={{ delay: 0.1, duration: 0.5 }}
           >
             <div className="max-w-2xl mx-auto">
               
@@ -225,7 +224,10 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
                 {/* Upload Button */}
                 {selectedFile && !isProcessing && (
                   <motion.button
-                    onClick={handleAnalyze}
+                    onClick={(e) => {
+                      e.stopPropagation(); // Prevent dropzone from triggering
+                      handleAnalyze();
+                    }}
                     className="mt-6 px-8 py-4 bg-gradient-to-r from-green-500 to-blue-500 
                                hover:from-green-400 hover:to-blue-400 text-white font-bold 
                                text-lg rounded-2xl transition-all transform hover:scale-105 
@@ -473,6 +475,29 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
 
         </div>
       </div>
+
+      {/* Footer */}
+      <footer className="relative z-10 bg-gray-900/50 backdrop-blur-sm border-t border-gray-600/30 py-8 px-6">
+        <div className="max-w-6xl mx-auto text-center space-y-2">
+          <motion.p 
+            className="text-gray-400 text-sm md:text-base"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 2.2, duration: 0.6 }}
+          >
+            Made with ❤️ by{' '}
+            <span className="text-yellow-400 font-semibold">Idan Rodriguez</span>
+          </motion.p>
+          <motion.p 
+            className="text-gray-500 text-xs md:text-sm"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 2.4, duration: 0.6 }}
+          >
+            © {new Date().getFullYear()} PokerVision. All rights reserved.
+          </motion.p>
+        </div>
+      </footer>
     </div>
   );
 };

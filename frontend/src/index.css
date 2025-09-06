@@ -5,27 +5,36 @@
 @layer base {
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    /* Enable font display swap for better performance */
+    font-display: swap;
+  }
+  
+  /* Optimize rendering performance */
+  * {
+    box-sizing: border-box;
+  }
+  
+  /* Reduce layout shifts */
+  img {
+    height: auto;
+    max-width: 100%;
   }
 }
 
 @layer components {
-  .btn-primary {
-    @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+  /* Critical performance optimizations */
+  .will-change-transform {
+    will-change: transform;
   }
   
-  .btn-secondary {
-    @apply bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+  .gpu-accelerated {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    perspective: 1000px;
   }
   
-  .card {
-    @apply bg-white rounded-xl shadow-lg p-6 border border-gray-100;
-  }
-  
-  .upload-zone {
-    @apply border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-xl p-8 text-center transition-colors duration-200 cursor-pointer;
-  }
-  
-  .upload-zone.dragover {
-    @apply border-blue-500 bg-blue-50;
+  /* Optimize animation performance */
+  .smooth-animation {
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
 }

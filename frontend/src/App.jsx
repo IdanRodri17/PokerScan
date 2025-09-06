@@ -1,6 +1,18 @@
-import React, { useState } from 'react';
-import PokerLandingPage from './components/PokerLandingPage';
-import PokerResultsPage from './components/PokerResultsPage';
+import React, { useState, Suspense, lazy } from 'react';
+
+// Lazy load components for better performance
+const PokerLandingPage = lazy(() => import('./components/PokerLandingPage'));
+const PokerResultsPage = lazy(() => import('./components/PokerResultsPage'));
+
+// Loading component
+const LoadingSpinner = () => (
+  <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-black flex items-center justify-center">
+    <div className="flex flex-col items-center gap-4">
+      <div className="w-12 h-12 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin"></div>
+      <p className="text-white font-semibold">Loading...</p>
+    </div>
+  </div>
+);
 
 function App() {
   const [currentView, setCurrentView] = useState('landing'); // 'landing' or 'results'
@@ -84,20 +96,22 @@ function App() {
       )}
 
       {/* Main Content */}
-      {currentView === 'landing' && (
-        <PokerLandingPage
-          onImageUpload={handleImageUpload}
-          isProcessing={isProcessing}
-        />
-      )}
+      <Suspense fallback={<LoadingSpinner />}>
+        {currentView === 'landing' && (
+          <PokerLandingPage
+            onImageUpload={handleImageUpload}
+            isProcessing={isProcessing}
+          />
+        )}
 
-      {currentView === 'results' && gameResults && (
-        <PokerResultsPage
-          gameData={gameResults}
-          onBack={handleBackToUpload}
-          onAnalyzeAnother={handleAnalyzeAnother}
-        />
-      )}
+        {currentView === 'results' && gameResults && (
+          <PokerResultsPage
+            gameData={gameResults}
+            onBack={handleBackToUpload}
+            onAnalyzeAnother={handleAnalyzeAnother}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

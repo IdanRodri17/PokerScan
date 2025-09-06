@@ -31,7 +31,7 @@ const PlayingCard = ({
 
   // Size variants
   const sizeClasses = {
-    sm: 'w-12 h-16 text-xs',
+    sm: 'w-14 h-18 text-xs',
     md: 'w-16 h-24 text-sm',
     lg: 'w-20 h-28 text-base',
     xl: 'w-24 h-36 text-lg'
@@ -51,6 +51,14 @@ const PlayingCard = ({
     md: 'text-sm', 
     lg: 'text-base',
     xl: 'text-lg'
+  };
+
+  // Suit sizes for corners
+  const cornerSuitSizes = {
+    sm: 'text-xs',
+    md: 'text-xs',
+    lg: 'text-sm',
+    xl: 'text-sm'
   };
 
   const cardVariants = {
@@ -106,7 +114,7 @@ const PlayingCard = ({
       <div className={`
         ${sizeClasses[size]}
         bg-white rounded-lg shadow-lg border-2 border-gray-300
-        flex flex-col justify-between p-2
+        flex flex-col justify-between ${size === 'sm' ? 'p-0.5' : 'p-2'}
         font-bold relative overflow-hidden
         ${isHighlighted ? 'ring-2 ring-yellow-400 ring-opacity-75' : ''}
         transform-gpu backface-visibility-hidden
@@ -122,17 +130,9 @@ const PlayingCard = ({
           ${color === 'red' ? 'text-red-600' : 'text-gray-800'}
         `}>
           <div className={`text-current font-black ${cornerTextSizes[size]}`}>{rank}</div>
-          <div className={`text-current ${size === 'sm' ? 'text-xs' : 'text-xs'}`}>{suit}</div>
+          <div className={`text-current ${cornerSuitSizes[size]}`}>{suit}</div>
         </div>
 
-        {/* Center Suit Symbol */}
-        <div className={`
-          absolute inset-0 flex items-center justify-center
-          ${color === 'red' ? 'text-red-600' : 'text-gray-800'}
-          opacity-20
-        `}>
-          <span className={`${centerSuitSizes[size]} font-normal`}>{suit}</span>
-        </div>
 
         {/* Bottom Right Corner (Rotated) */}
         <div className={`
@@ -140,7 +140,7 @@ const PlayingCard = ({
           ${color === 'red' ? 'text-red-600' : 'text-gray-800'}
         `}>
           <div className={`text-current font-black ${cornerTextSizes[size]}`}>{rank}</div>
-          <div className={`text-current ${size === 'sm' ? 'text-xs' : 'text-xs'}`}>{suit}</div>
+          <div className={`text-current ${cornerSuitSizes[size]}`}>{suit}</div>
         </div>
 
         {/* Highlight Glow Effect */}

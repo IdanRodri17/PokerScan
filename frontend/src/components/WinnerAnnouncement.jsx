@@ -98,7 +98,7 @@ const WinnerAnnouncement = ({ winner, isVisible = false }) => {
             transition={{ delay: 1, duration: 1, type: "spring" }}
             className="flex justify-center mb-4 md:mb-6"
           >
-            <div className="relative">
+            <div className="relative p-4 md:p-6">
               <Trophy 
                 size={80} // Mobile size
                 className="text-yellow-400 drop-shadow-2xl filter md:w-[120px] md:h-[120px]" 
@@ -123,7 +123,7 @@ const WinnerAnnouncement = ({ winner, isVisible = false }) => {
           >
             <span className="bg-gradient-to-r from-yellow-300 via-yellow-400 to-orange-400 
                            bg-clip-text text-transparent animate-pulse 
-                           drop-shadow-2xl filter">
+                           drop-shadow-2xl filter px-4 py-2">
               WINNER!
             </span>
           </motion.h1>

@@ -41,6 +41,29 @@ class AnalysisSummary(BaseModel):
     player_count: int
     metadata: Dict[str, Any]
 
+class PlayerInfo(BaseModel):
+    """Player information from game analysis"""
+    id: int
+    name: str
+    position: str
+    hole_cards: List[str]
+    best_hand: Optional[str] = None
+    hand_description: Optional[str] = None
+
+class WinnerInfo(BaseModel):
+    """Winner information"""
+    id: int
+    name: str
+    winning_hand: str
+
+class GameAnalysis(BaseModel):
+    """Complete poker game analysis results"""
+    community_cards: List[str]
+    players: List[PlayerInfo]
+    winner: Optional[WinnerInfo] = None
+    tie: bool = False
+    tied_players: Optional[List[Dict[str, Any]]] = None
+
 class ImageUploadResponse(BaseModel):
     """Enhanced response with structured card detection results"""
     success: bool
@@ -49,6 +72,8 @@ class ImageUploadResponse(BaseModel):
     timestamp: datetime
     detection_results: Optional[List[Dict[str, Any]]] = None  # Flexible structure for different section types
     processing_time: Optional[float] = None
+    game_analysis: Optional[GameAnalysis] = None  # Complete poker game analysis
+    visualization_path: Optional[str] = None  # Path to annotated visualization image
     
     # Backward compatibility
     cards_detected: Optional[List[str]] = None  # Simple card names for backward compatibility
@@ -63,6 +88,8 @@ class ModelStatusResponse(BaseModel):
     error: Optional[str] = None
 
 class HealthCheckResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    
     status: str
     timestamp: datetime
     version: str

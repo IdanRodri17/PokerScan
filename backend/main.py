@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 import logging
 import os
 from datetime import datetime
@@ -36,6 +37,12 @@ app.add_middleware(
 # Initialize services
 image_processor = ImageProcessor()
 
+# Create visualizations directory if it doesn't exist
+os.makedirs("visualizations", exist_ok=True)
+
+# Mount static files for visualizations
+app.mount("/visualizations", StaticFiles(directory="visualizations"), name="visualizations")
+
 @app.get("/health", response_model=HealthCheckResponse)
 async def health_check():
     """Health check endpoint with model status"""
@@ -50,7 +57,10 @@ async def health_check():
     )
 
 @app.post("/upload", response_model=ImageUploadResponse)
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(
+    file: UploadFile = File(...),
+    create_visualization: bool = Query(False, description="Create annotated visualization with winner announcement")
+):
     """
     Upload and process poker card image
     """
@@ -72,20 +82,57 @@ async def upload_image(file: UploadFile = File(...)):
                 detail="Invalid image format"
             )
         
-        # Process the image
-        detection_results, processing_time = image_processor.process_image(
+        # Process the image with game analysis and optional visualization
+        detection_results, processing_time, game_analysis, visualization_path = image_processor.process_image(
             BytesIO(content), 
-            file.filename
+            file.filename,
+            analyze_game=True,
+            create_visualization=create_visualization
         )
         
         # Extract simple card names for backward compatibility
         simple_card_names = []
         for section in detection_results:
-            if section.get("type") in ["community_cards", "player_hand", "unassigned_cards"]:
-                cards = section.get("cards", [])
-                simple_card_names.extend([card["name"] for card in cards])
+            if isinstance(section, dict):
+                if section.get("type") in ["community_cards", "player_hand", "unassigned_cards"]:
+                    # Structured format with sections
+                    cards = section.get("cards", [])
+                    simple_card_names.extend([card["name"] for card in cards])
+                elif "card" in section:
+                    # Direct detection format
+                    simple_card_names.append(section["card"])
+        
+        # If no cards were extracted from structured format, try direct format
+        if not simple_card_names and detection_results:
+            for result in detection_results:
+                if isinstance(result, dict) and "card" in result:
+                    simple_card_names.append(result["card"])
         
         logger.info(f"Successfully processed image: {file.filename}")
+        logger.info(f"Detection results type: {type(detection_results)}")
+        logger.info(f"Detection results: {detection_results}")
+        logger.info(f"Simple card names extracted: {simple_card_names}")
+        
+        # Convert game analysis to proper format if available
+        game_analysis_response = None
+        if game_analysis:
+            from models.schemas import GameAnalysis, PlayerInfo, WinnerInfo
+            
+            players = []
+            for player_data in game_analysis.get('players', []):
+                players.append(PlayerInfo(**player_data))
+            
+            winner_info = None
+            if game_analysis.get('winner'):
+                winner_info = WinnerInfo(**game_analysis['winner'])
+            
+            game_analysis_response = GameAnalysis(
+                community_cards=game_analysis.get('community_cards', []),
+                players=players,
+                winner=winner_info,
+                tie=game_analysis.get('tie', False),
+                tied_players=game_analysis.get('tied_players')
+            )
         
         return ImageUploadResponse(
             success=True,
@@ -94,7 +141,9 @@ async def upload_image(file: UploadFile = File(...)):
             timestamp=datetime.now(),
             detection_results=detection_results,
             cards_detected=simple_card_names,  # Backward compatibility
-            processing_time=processing_time
+            processing_time=processing_time,
+            game_analysis=game_analysis_response,
+            visualization_path=visualization_path
         )
         
     except HTTPException:

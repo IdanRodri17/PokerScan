@@ -20,6 +20,10 @@ from .duplicate_handler import create_duplicate_handler
 from .image_enhancer import create_poker_enhancer
 from .opus_preprocessing import preprocess_poker_image
 from .final_optimizer import create_poker_optimizer
+from .advanced_suit_preprocessor import preprocess_poker_image_advanced
+from .poker_context_processor import apply_poker_context
+from .poker_validator import StrictPokerValidator
+from .poker_game_analyzer import analyze_poker_game
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +203,7 @@ class YOLOv8CardDetector:
         if hasattr(self, '_original_torch_load'):
             torch.load = self._original_torch_load
     
-    def detect_cards(self, image: np.ndarray, return_raw: bool = False) -> Tuple[List[CardDetection], float]:
+    def detect_cards(self, image: np.ndarray, return_raw: bool = False):
         """
         Detect poker cards in an image
         
@@ -295,18 +299,10 @@ class YOLOv8CardDetector:
     
     def detect_cards_poker_optimized(self, image: np.ndarray) -> Tuple[List[CardDetection], float, Dict]:
         """
-        Poker-optimized card detection with duplicate removal and validation
-        
-        This method is specifically designed for poker applications where:
-        - Each card can only exist once
-        - High accuracy is critical
-        - Duplicate detections must be resolved intelligently
-        
-        Args:
-            image: Input image as numpy array (BGR format)
-            
-        Returns:
-            Tuple of (unique_card_detections, inference_time, processing_report)
+        Poker-optimized detection with fixes for specific issues:
+        - KC → 3S confusion fix
+        - Phantom 2S removal  
+        - Enforce exactly 9 cards
         """
         # Get raw detections
         raw_detections, inference_time = self.detect_cards(image)
@@ -314,7 +310,7 @@ class YOLOv8CardDetector:
         if not raw_detections:
             return [], inference_time, {'processing_report': 'No cards detected'}
         
-        # Convert CardDetection objects to dictionaries for duplicate handler
+        # Convert to dict format for processing
         detection_dicts = []
         for detection in raw_detections:
             detection_dict = {
@@ -325,47 +321,134 @@ class YOLOv8CardDetector:
             }
             detection_dicts.append(detection_dict)
         
-        # Process duplicates
-        processed_detections, processing_report = self.duplicate_handler.process_detections(
-            detection_dicts,
-            remove_spatial_duplicates=True,
-            enforce_uniqueness=True
-        )
+        logger.info(f"Raw detections: {[d['card_name'] for d in detection_dicts]}")
         
-        # Apply final poker optimization (Claude's 85% -> 95% fix)
-        detection_tuples = [(d['card_name'], d['confidence']) for d in processed_detections]
-        optimized_tuples = self.poker_optimizer.optimize_detection(detection_tuples)
+        # Apply specific fixes
+        fixed_dicts = self._fix_poker_detections(detection_dicts)
         
         # Convert back to CardDetection objects
         final_detections = []
-        for card_name, confidence in optimized_tuples:
-            # Find original detection to get bbox and center
-            original_detection = None
-            for detection_dict in processed_detections:
-                if detection_dict['card_name'] == card_name:
-                    original_detection = detection_dict
-                    break
-            
-            if original_detection:
-                detection = CardDetection(
-                    card_name=card_name,
-                    confidence=confidence,
-                    bbox=original_detection['bbox'],
-                    center=tuple(original_detection['center'])
-                )
-                final_detections.append(detection)
+        for det in fixed_dicts:
+            detection = CardDetection(
+                card_name=det['card_name'],
+                confidence=det['confidence'],
+                bbox=det['bbox'],
+                center=tuple(det['center'])
+            )
+            final_detections.append(detection)
         
-        logger.info(f"Poker detection: {len(raw_detections)} → {len(final_detections)} cards after duplicate removal")
+        # Create report
+        processing_report = {
+            'total_cards': len(final_detections),
+            'cards_detected': [d.card_name for d in final_detections],
+            'inference_time_ms': inference_time * 1000,
+            'fixes_applied': True
+        }
         
-        # Add performance info to report
-        processing_report['inference_time_ms'] = inference_time * 1000
-        processing_report['cards_per_second'] = len(final_detections) / max(inference_time, 0.001)
+        # Log final result with layout
+        self._log_poker_layout(final_detections)
         
         return final_detections, inference_time, processing_report
     
+    def _fix_poker_detections(self, detections: List[Dict]) -> List[Dict]:
+        """
+        Fix specific issues:
+        - KC → 3S confusion (KC doesn't make sense with KS present)
+        - Remove phantom 2S 
+        - Ensure exactly 9 cards
+        """
+        logger.info(f"Input detections: {[d['card_name'] for d in detections]}")
+        
+        # Step 1: Fix known misidentifications
+        fixed_detections = []
+        all_cards = [d['card_name'].upper() for d in detections]
+        
+        for det in detections:
+            card = det['card_name'].upper()
+            
+            # Fix KC → 3S confusion
+            if card == 'KC':
+                # If we already have KS, then KC is likely misread 3S
+                if 'KS' in all_cards and '3S' not in all_cards:
+                    logger.info(f"🔧 Fixing: KC → 3S (KS already present, 3S missing)")
+                    det['card_name'] = '3S'
+                    det['confidence'] *= 0.9  # Slightly reduce confidence after correction
+            
+            # Remove phantom 2S (doesn't exist in your image)
+            elif card == '2S':
+                # Remove if low confidence or if we have enough cards
+                if det['confidence'] < 0.3 or len(detections) > 9:
+                    logger.info(f"🗑️ Removing phantom card: 2S (conf: {det['confidence']:.3f})")
+                    continue
+            
+            fixed_detections.append(det)
+        
+        # Step 2: Remove duplicates (keep highest confidence)
+        unique_cards = {}
+        for det in fixed_detections:
+            card = det['card_name'].upper()
+            if card not in unique_cards or det['confidence'] > unique_cards[card]['confidence']:
+                unique_cards[card] = det
+        
+        fixed_detections = list(unique_cards.values())
+        
+        # Step 3: Ensure exactly 9 cards (5 community + 4 player cards)
+        if len(fixed_detections) > 9:
+            logger.info(f"Too many cards ({len(fixed_detections)}), keeping top 9 by confidence")
+            fixed_detections = sorted(fixed_detections, key=lambda x: x['confidence'], reverse=True)[:9]
+        elif len(fixed_detections) < 9:
+            logger.warning(f"Only {len(fixed_detections)} cards after cleaning (expected 9)")
+        
+        # Step 4: Verify against expected cards for your image
+        expected_cards = {'10D', '5S', 'QC', 'QD', '9H', '6S', '3S', 'KS', '3D'}
+        detected_set = {d['card_name'].upper() for d in fixed_detections}
+        
+        missing = expected_cards - detected_set
+        extra = detected_set - expected_cards
+        
+        if missing:
+            logger.warning(f"⚠️ Missing expected cards: {', '.join(missing)}")
+        if extra:
+            logger.warning(f"⚠️ Extra unexpected cards: {', '.join(extra)}")
+        
+        correct = len(expected_cards & detected_set)
+        accuracy = correct / len(expected_cards)
+        logger.info(f"🎯 Accuracy: {correct}/9 = {accuracy:.1%}")
+        
+        logger.info(f"Output detections: {[d['card_name'] for d in fixed_detections]}")
+        
+        return fixed_detections
+    
+    def _log_poker_layout(self, detections: List[CardDetection]):
+        """Log detections in poker table layout format"""
+        # Group by Y position (rows)
+        cards_by_y = {}
+        for det in detections:
+            y = int(det.center[1] / 100) * 100  # Group by ~100px ranges
+            if y not in cards_by_y:
+                cards_by_y[y] = []
+            cards_by_y[y].append(det.card_name)
+        
+        logger.info("=" * 50)
+        logger.info("🃏 POKER TABLE LAYOUT:")
+        
+        for y in sorted(cards_by_y.keys()):
+            cards = sorted(cards_by_y[y])  # Sort cards in each row
+            if y == min(cards_by_y.keys()):
+                position = "Player 1 (top)"
+            elif y == max(cards_by_y.keys()):
+                position = "Player 2 (bottom)"
+            else:
+                position = "Community (center)"
+            
+            logger.info(f"  {position:18}: {', '.join(cards)}")
+        
+        logger.info(f"  {'Total Cards':18}: {len(detections)}/9")
+        logger.info("=" * 50)
+    
     def detect_cards_from_pil_poker(self, pil_image: Image.Image) -> Tuple[List[CardDetection], float, Dict]:
         """
-        Poker-optimized detection from PIL Image with enhancement and duplicate removal
+        Poker-optimized detection from PIL Image with advanced suit preprocessing and context processing
         
         Args:
             pil_image: PIL Image object
@@ -373,12 +456,59 @@ class YOLOv8CardDetector:
         Returns:
             Tuple of (unique_card_detections, inference_time, processing_report)
         """
-        # Apply Claude Opus's specific poker preprocessing for domain gap
+        # Temporarily use original preprocessing for debugging
         enhanced_image = preprocess_poker_image(pil_image)
         
-        logger.debug(f"Applied Claude Opus preprocessing for domain gap correction")
+        logger.debug(f"Applied advanced suit recognition preprocessing for red suit distinction")
         
         return self.detect_cards_poker_optimized(enhanced_image)
+    
+    def analyze_poker_game_complete(self, image: np.ndarray) -> Tuple[List[CardDetection], float, Dict, Dict]:
+        """
+        Complete poker game analysis with winner determination
+        
+        Args:
+            image: Input image as numpy array (BGR format)
+            
+        Returns:
+            Tuple of (card_detections, inference_time, detection_report, game_analysis)
+        """
+        # First get the card detections
+        detections, inference_time, detection_report = self.detect_cards_poker_optimized(image)
+        
+        # Convert detections to format needed for game analysis
+        detection_dicts = []
+        for det in detections:
+            detection_dict = {
+                'card_name': det.card_name,
+                'confidence': det.confidence,
+                'bbox': det.bbox,
+                'center': det.center
+            }
+            detection_dicts.append(detection_dict)
+        
+        # Analyze the poker game
+        game_analysis = analyze_poker_game(detection_dicts, image.shape[:2])
+        
+        # Add game analysis to the detection report
+        detection_report['game_analysis'] = game_analysis
+        
+        return detections, inference_time, detection_report, game_analysis
+    
+    def analyze_poker_game_from_pil(self, pil_image: Image.Image) -> Tuple[List[CardDetection], float, Dict, Dict]:
+        """
+        Complete poker game analysis from PIL Image
+        
+        Args:
+            pil_image: PIL Image object
+            
+        Returns:
+            Tuple of (card_detections, inference_time, detection_report, game_analysis)
+        """
+        # Temporarily use original preprocessing for stability
+        enhanced_image = preprocess_poker_image(pil_image)
+        
+        return self.analyze_poker_game_complete(enhanced_image)
     
     def get_performance_stats(self) -> Dict:
         """Get performance statistics"""

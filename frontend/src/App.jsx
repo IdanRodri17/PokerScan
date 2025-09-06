@@ -1,133 +1,103 @@
-import React, { useState, useEffect } from 'react';
-import ImageUpload from './components/ImageUpload';
-import CameraCapture from './components/CameraCapture';
-import ResultsDisplay from './components/ResultsDisplay';
-import { apiService } from './services/api';
+import React, { useState } from 'react';
+import PokerLandingPage from './components/PokerLandingPage';
+import PokerResultsPage from './components/PokerResultsPage';
 
 function App() {
-  const [activeTab, setActiveTab] = useState('upload');
-  const [result, setResult] = useState(null);
+  const [currentView, setCurrentView] = useState('landing'); // 'landing' or 'results'
+  const [gameResults, setGameResults] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState(null);
-  const [healthStatus, setHealthStatus] = useState('checking');
 
-  useEffect(() => {
-    checkHealth();
-  }, []);
+  const handleImageUpload = async (file) => {
+    setIsProcessing(true);
+    setError(null);
 
-  const checkHealth = async () => {
+    const formData = new FormData();
+    formData.append('file', file);
+
     try {
-      await apiService.healthCheck();
-      setHealthStatus('healthy');
+      // Call your backend API
+      const response = await fetch('http://localhost:8000/upload?create_visualization=true', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setGameResults(data);
+        setCurrentView('results');
+      } else {
+        throw new Error(data.message || 'Failed to analyze image');
+      }
+
     } catch (err) {
-      setHealthStatus('error');
-      console.error('Health check failed:', err);
+      console.error('Upload error:', err);
+      setError(err.message || 'Failed to analyze poker image. Please try again.');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const handleSuccess = (result) => {
-    setResult(result);
+  const handleBackToUpload = () => {
+    setCurrentView('landing');
+    setGameResults(null);
     setError(null);
   };
 
-  const handleError = (error) => {
-    setError(error);
-    setResult(null);
-  };
-
-  const clearResults = () => {
-    setResult(null);
+  const handleAnalyzeAnother = () => {
+    setCurrentView('landing');
+    setGameResults(null);
     setError(null);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="container mx-auto px-4 py-8">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            🃏 PokerVision
-          </h1>
-          <p className="text-lg text-gray-600">
-            AI-powered poker card detection
-          </p>
-          <div className="mt-4">
-            <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-              healthStatus === 'healthy' 
-                ? 'bg-green-50 text-green-700' 
-                : healthStatus === 'error'
-                ? 'bg-red-50 text-red-700'
-                : 'bg-gray-50 text-gray-700'
-            }`}>
-              <div className={`w-2 h-2 rounded-full mr-2 ${
-                healthStatus === 'healthy' 
-                  ? 'bg-green-400' 
-                  : healthStatus === 'error'
-                  ? 'bg-red-400'
-                  : 'bg-gray-400 animate-pulse'
-              }`}></div>
-              {healthStatus === 'healthy' ? 'API Connected' : 
-               healthStatus === 'error' ? 'API Disconnected' : 'Checking...'}
-            </span>
-          </div>
-        </header>
-
-        <div className="max-w-4xl mx-auto">
-          <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
-            <div className="flex flex-wrap gap-2 mb-6">
-              <button
-                onClick={() => setActiveTab('upload')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  activeTab === 'upload'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                📁 Upload Image
-              </button>
-              <button
-                onClick={() => setActiveTab('camera')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  activeTab === 'camera'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                📷 Camera Capture
-              </button>
-              {(result || error) && (
-                <button
-                  onClick={clearResults}
-                  className="px-4 py-2 rounded-lg font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 ml-auto"
-                >
-                  🗑️ Clear Results
-                </button>
-              )}
+    <div className="App">
+      {/* Error Toast */}
+      {error && (
+        <div className="fixed top-4 right-4 z-50 bg-red-500/90 backdrop-blur-sm 
+                        text-white p-4 rounded-lg shadow-lg border border-red-400/30
+                        max-w-md animate-in slide-in-from-right">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 w-5 h-5 rounded-full bg-red-400 
+                            flex items-center justify-center mt-0.5">
+              <span className="text-xs font-bold">!</span>
             </div>
-
-            {activeTab === 'upload' && (
-              <ImageUpload
-                onUploadSuccess={handleSuccess}
-                onUploadError={handleError}
-              />
-            )}
-
-            {activeTab === 'camera' && (
-              <CameraCapture
-                onCaptureSuccess={handleSuccess}
-                onCaptureError={handleError}
-              />
-            )}
+            <div>
+              <p className="font-semibold mb-1">Upload Error</p>
+              <p className="text-sm opacity-90">{error}</p>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              className="flex-shrink-0 text-white/70 hover:text-white ml-auto"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
-
-          {(result || error) && (
-            <ResultsDisplay result={result} error={error} />
-          )}
         </div>
+      )}
 
-        <footer className="text-center mt-12 text-gray-500">
-          <p>Built with React, FastAPI, and ❤️</p>
-          <p className="text-sm mt-1">Ready for YOLOv8 integration</p>
-        </footer>
-      </div>
+      {/* Main Content */}
+      {currentView === 'landing' && (
+        <PokerLandingPage
+          onImageUpload={handleImageUpload}
+          isProcessing={isProcessing}
+        />
+      )}
+
+      {currentView === 'results' && gameResults && (
+        <PokerResultsPage
+          gameData={gameResults}
+          onBack={handleBackToUpload}
+          onAnalyzeAnother={handleAnalyzeAnother}
+        />
+      )}
     </div>
   );
 }

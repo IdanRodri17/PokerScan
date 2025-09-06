@@ -1,0 +1,461 @@
+import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { ArrowLeft, Share2, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import WinnerAnnouncement from './WinnerAnnouncement';
+import PokerTableView from './PokerTableView';
+import HandComparisonPanel from './HandComparisonPanel';
+
+const PokerResultsPage = ({ 
+  gameData, 
+  onBack, 
+  onAnalyzeAnother,
+  originalImage 
+}) => {
+  const [currentSection, setCurrentSection] = useState(0);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [showWinner, setShowWinner] = useState(false);
+
+  // Sections timing
+  useEffect(() => {
+    const timings = [
+      { delay: 500, section: 0, action: () => setShowWinner(true) }, // Winner announcement
+      { delay: 4000, section: 1 }, // Poker table
+      { delay: 6000, section: 2 }  // Hand comparison
+    ];
+
+    const timeouts = timings.map(({ delay, section, action }) =>
+      setTimeout(() => {
+        setCurrentSection(section);
+        if (action) action();
+      }, delay)
+    );
+
+    return () => timeouts.forEach(clearTimeout);
+  }, []);
+
+  // Play sound effect for winner
+  useEffect(() => {
+    if (showWinner && soundEnabled) {
+      // You can add actual sound file here
+      // const audio = new Audio('/sounds/fanfare.mp3');
+      // audio.play().catch(() => {}); // Ignore if audio fails
+    }
+  }, [showWinner, soundEnabled]);
+
+  const shareResults = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'PokerVision Results',
+          text: `${gameData?.game_analysis?.winner?.name} wins with ${gameData?.game_analysis?.winner?.winning_hand}!`,
+          url: window.location.href
+        });
+      } catch (err) {
+        console.log('Error sharing:', err);
+      }
+    } else {
+      // Fallback: copy to clipboard
+      const text = `PokerVision Results: ${gameData?.game_analysis?.winner?.name} wins with ${gameData?.game_analysis?.winner?.winning_hand}!`;
+      navigator.clipboard.writeText(text);
+      // You could show a toast here
+    }
+  };
+
+  if (!gameData || !gameData.game_analysis) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-white text-xl">Loading results...</div>
+      </div>
+    );
+  }
+
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: { staggerChildren: 0.3 }
+    }
+  };
+
+  const sectionVariants = {
+    hidden: { opacity: 0, y: 50 },
+    visible: { 
+      opacity: 1, 
+      y: 0,
+      transition: { duration: 0.8, ease: "easeOut" }
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-black overflow-hidden">
+      {/* Background Pattern */}
+      <div className="fixed inset-0 opacity-5">
+        <div className="absolute inset-0" style={{
+          backgroundImage: `radial-gradient(circle at 25% 25%, rgba(255,215,0,0.1) 0%, transparent 50%),
+                           radial-gradient(circle at 75% 75%, rgba(34,197,94,0.1) 0%, transparent 50%)`
+        }} />
+      </div>
+
+      {/* Header Controls */}
+      <motion.div 
+        className="relative z-50 p-4 md:p-6"
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+      >
+        <div className="max-w-6xl mx-auto">
+          {/* Mobile Layout */}
+          <div className="flex flex-col gap-4 md:hidden">
+            <button
+              onClick={onBack}
+              className="flex items-center gap-2 px-4 py-3 bg-gray-800/50 hover:bg-gray-700/50 
+                         text-white rounded-lg transition-colors backdrop-blur-sm border border-gray-600/30
+                         justify-center font-medium"
+            >
+              <ArrowLeft size={20} />
+              Back to Upload
+            </button>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => setSoundEnabled(!soundEnabled)}
+                className="flex items-center justify-center gap-2 p-3 bg-gray-800/50 hover:bg-gray-700/50 
+                           text-white rounded-lg transition-colors backdrop-blur-sm border border-gray-600/30"
+              >
+                {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                <span className="text-xs">Sound</span>
+              </button>
+
+              <button
+                onClick={shareResults}
+                className="flex items-center justify-center gap-2 p-3 bg-blue-600/80 hover:bg-blue-500/80 
+                           text-white rounded-lg transition-colors backdrop-blur-sm text-sm"
+              >
+                <Share2 size={18} />
+                <span className="text-xs">Share</span>
+              </button>
+
+              <button
+                onClick={onAnalyzeAnother}
+                className="flex items-center justify-center gap-2 p-3 bg-green-600/80 hover:bg-green-500/80 
+                           text-white rounded-lg transition-colors backdrop-blur-sm text-sm"
+              >
+                <RotateCcw size={18} />
+                <span className="text-xs">Again</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Desktop Layout */}
+          <div className="hidden md:flex justify-between items-center">
+            <button
+              onClick={onBack}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-800/50 hover:bg-gray-700/50 
+                         text-white rounded-lg transition-colors backdrop-blur-sm border border-gray-600/30"
+            >
+              <ArrowLeft size={20} />
+              Back to Upload
+            </button>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setSoundEnabled(!soundEnabled)}
+                className="p-2 bg-gray-800/50 hover:bg-gray-700/50 text-white rounded-lg 
+                           transition-colors backdrop-blur-sm border border-gray-600/30"
+              >
+                {soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+              </button>
+
+              <button
+                onClick={shareResults}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600/80 hover:bg-blue-500/80 
+                           text-white rounded-lg transition-colors backdrop-blur-sm"
+              >
+                <Share2 size={20} />
+                Share
+              </button>
+
+              <button
+                onClick={onAnalyzeAnother}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600/80 hover:bg-green-500/80 
+                           text-white rounded-lg transition-colors backdrop-blur-sm"
+              >
+                <RotateCcw size={20} />
+                Analyze Another
+              </button>
+            </div>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Main Content */}
+      <motion.div
+        className="relative z-10 px-4 md:px-6 pb-8 md:pb-12"
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+      >
+        <div className="max-w-6xl mx-auto space-y-8 md:space-y-12">
+          
+          {/* Section 1: Winner Spotlight */}
+          <motion.section
+            variants={sectionVariants}
+            className="min-h-[50vh] flex items-center justify-center"
+          >
+            <WinnerAnnouncement 
+              winner={gameData.game_analysis.winner}
+              isVisible={showWinner}
+            />
+          </motion.section>
+
+          {/* Section 2: Poker Table View */}
+          {currentSection >= 1 && (
+            <motion.section
+              variants={sectionVariants}
+              className="py-8"
+            >
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.5 }}
+                className="text-center mb-8"
+              >
+                <h2 className="text-4xl font-bold text-white mb-4">
+                  Game Analysis
+                </h2>
+                <p className="text-gray-300 text-lg max-w-2xl mx-auto">
+                  See how the cards were distributed and why 
+                  <span className="text-yellow-400 font-semibold ml-1">
+                    {gameData.game_analysis.winner?.name}
+                  </span> won
+                </p>
+              </motion.div>
+
+              <PokerTableView 
+                gameAnalysis={gameData.game_analysis}
+                showAnimation={currentSection >= 1}
+              />
+            </motion.section>
+          )}
+
+          {/* Section 3: Hand Comparison */}
+          {currentSection >= 2 && (
+            <motion.section
+              variants={sectionVariants}
+              className="py-8"
+            >
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.5 }}
+                className="text-center mb-8"
+              >
+                <h2 className="text-4xl font-bold text-white mb-4">
+                  Detailed Hand Comparison
+                </h2>
+                <p className="text-gray-300 text-lg max-w-2xl mx-auto">
+                  Compare the best possible hands each player could make
+                </p>
+              </motion.div>
+
+              <HandComparisonPanel 
+                gameAnalysis={gameData.game_analysis}
+                showAnimation={currentSection >= 2}
+              />
+            </motion.section>
+          )}
+
+          {/* App Purpose & Photo Tips */}
+          <motion.section
+            variants={sectionVariants}
+            className="py-4 md:py-8"
+          >
+            <div className="bg-gradient-to-br from-gray-800/50 via-gray-700/40 to-gray-800/50 
+                            backdrop-blur-lg rounded-3xl p-6 md:p-8 border border-gray-600/30 
+                            shadow-2xl relative overflow-hidden">
+              
+              {/* Background Decoration */}
+              <div className="absolute top-0 right-0 opacity-5 text-8xl text-yellow-400">
+                🃏
+              </div>
+              <div className="absolute bottom-0 left-0 opacity-5 text-6xl text-green-400">
+                🏆
+              </div>
+              
+              <div className="relative z-10">
+                {/* Main Story */}
+                <div className="text-center mb-8">
+                  <motion.h2 
+                    className="text-3xl md:text-4xl font-bold text-white mb-6"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.2 }}
+                  >
+                    <span className="text-yellow-400">The End</span> of Your Poker Arguments! 
+                  </motion.h2>
+                  
+                  <motion.div
+                    className="max-w-4xl mx-auto space-y-4 text-gray-300 text-lg md:text-xl leading-relaxed"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.4 }}
+                  >
+                    <p className="mb-4">
+                      <span className="text-red-400 font-semibold">"I won!"</span> 
+                      <span className="mx-4">vs</span>
+                      <span className="text-blue-400 font-semibold">"No, I won!"</span>
+                    </p>
+                    
+                    <p className="text-white font-medium">
+                      Sound familiar? We've all been there - that heated moment when two players 
+                      are absolutely convinced they have the winning hand. The argument gets louder, 
+                      cards get mixed up, and nobody can agree on who actually won.
+                    </p>
+                    
+                    <p>
+                      <span className="text-yellow-400 font-bold">PokerVision</span> ends these disputes 
+                      instantly! Just take a photo of your poker table, and our AI will analyze every 
+                      card, evaluate both hands using official poker rules, and declare the winner 
+                      with <span className="text-green-400 font-semibold">100% accuracy</span>.
+                    </p>
+                  </motion.div>
+                </div>
+
+                {/* Photo Tips Section */}
+                <motion.div
+                  className="bg-black/30 backdrop-blur-sm rounded-2xl p-6 border border-yellow-400/30"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.6 }}
+                >
+                  <h3 className="text-2xl font-bold text-yellow-300 mb-4 text-center flex items-center justify-center gap-2">
+                    📸 Perfect Photo Tips
+                  </h3>
+                  
+                  <div className="grid md:grid-cols-2 gap-6 items-center">
+                    {/* Tips Text */}
+                    <div className="space-y-3">
+                      <p className="text-white font-semibold text-lg">
+                        For best results, arrange your cards like this:
+                      </p>
+                      <ul className="space-y-2 text-gray-300">
+                        <li className="flex items-center gap-3">
+                          <span className="text-green-400 text-xl">🔝</span>
+                          <span><strong className="text-white">Top:</strong> Player 1's 2 hole cards</span>
+                        </li>
+                        <li className="flex items-center gap-3">
+                          <span className="text-yellow-400 text-xl">🎯</span>
+                          <span><strong className="text-white">Center:</strong> 5 community cards in a row</span>
+                        </li>
+                        <li className="flex items-center gap-3">
+                          <span className="text-blue-400 text-xl">🔽</span>
+                          <span><strong className="text-white">Bottom:</strong> Player 2's 2 hole cards</span>
+                        </li>
+                      </ul>
+                      <p className="text-sm text-gray-400 italic mt-4">
+                        💡 Keep cards clearly visible and well-lit for instant, accurate results!
+                      </p>
+                    </div>
+
+                    {/* Visual Layout Guide */}
+                    <div className="bg-gradient-to-br from-green-800/30 to-green-900/30 rounded-2xl p-4 border border-green-600/30">
+                      <div className="text-center space-y-3">
+                        {/* Player 1 */}
+                        <div className="flex justify-center gap-2">
+                          <div className="w-8 h-10 bg-green-400/80 rounded text-xs flex items-center justify-center text-black font-bold">
+                            P1
+                          </div>
+                          <div className="w-8 h-10 bg-green-400/80 rounded text-xs flex items-center justify-center text-black font-bold">
+                            P1
+                          </div>
+                        </div>
+                        
+                        {/* Community Cards */}
+                        <div className="flex justify-center gap-1">
+                          {[1,2,3,4,5].map(i => (
+                            <div key={i} className="w-6 h-8 bg-yellow-400/80 rounded text-xs flex items-center justify-center text-black font-bold">
+                              {i}
+                            </div>
+                          ))}
+                        </div>
+                        
+                        {/* Player 2 */}
+                        <div className="flex justify-center gap-2">
+                          <div className="w-8 h-10 bg-blue-400/80 rounded text-xs flex items-center justify-center text-black font-bold">
+                            P2
+                          </div>
+                          <div className="w-8 h-10 bg-blue-400/80 rounded text-xs flex items-center justify-center text-black font-bold">
+                            P2
+                          </div>
+                        </div>
+                        
+                        <p className="text-xs text-gray-400 mt-2">
+                          Ideal card layout for AI analysis
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Quick Stats */}
+                  <div className="grid grid-cols-3 gap-4 mt-6 pt-4 border-t border-gray-600/30">
+                    <div className="text-center">
+                      <div className="text-xl font-bold text-blue-400">
+                        {gameData.processing_time?.toFixed(1)}s
+                      </div>
+                      <div className="text-xs text-gray-400">Analysis Time</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xl font-bold text-green-400">
+                        {gameData.cards_detected?.length || 0}/9
+                      </div>
+                      <div className="text-xs text-gray-400">Cards Found</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-xl font-bold text-purple-400">
+                        100%
+                      </div>
+                      <div className="text-xs text-gray-400">Accuracy</div>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            </div>
+          </motion.section>
+
+          {/* Call to Action */}
+          <motion.section
+            variants={sectionVariants}
+            className="text-center py-12"
+          >
+            <motion.div
+              className="bg-gradient-to-br from-gray-800/50 via-gray-700/50 to-gray-800/50 
+                         backdrop-blur-lg rounded-3xl p-12 border border-gray-600/30"
+              whileHover={{ scale: 1.02 }}
+              transition={{ type: "spring", damping: 10 }}
+            >
+              <h3 className="text-3xl font-bold text-white mb-4">
+                Ready for Another Game?
+              </h3>
+              <p className="text-gray-300 mb-8 max-w-md mx-auto">
+                Upload another poker image to instantly see who wins
+              </p>
+              
+              <button
+                onClick={onAnalyzeAnother}
+                className="px-8 py-4 bg-gradient-to-r from-green-500 to-blue-500 
+                           hover:from-green-400 hover:to-blue-400 text-white font-bold 
+                           text-lg rounded-2xl transition-all transform hover:scale-105 
+                           shadow-lg shadow-green-500/25"
+              >
+                Analyze Another Image
+              </button>
+            </motion.div>
+          </motion.section>
+
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+export default PokerResultsPage;

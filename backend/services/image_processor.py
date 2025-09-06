@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from PIL import Image
 import numpy as np
+import cv2
 from typing import List, Tuple, Dict, Optional
 import logging
 from io import BytesIO
@@ -107,10 +108,19 @@ class ImageProcessor:
             logger.error(f"Image validation failed: {str(e)}")
             return False
     
-    def process_image(self, image_data: bytes, filename: str) -> Tuple[List[Dict], float]:
+    def process_image(self, image_data: bytes, filename: str, analyze_game: bool = True, create_visualization: bool = False) -> Tuple[List[Dict], float, Optional[Dict], Optional[str]]:
         """
         Process the uploaded image to detect poker cards using YOLOv8 and spatial analysis
-        Returns structured detection results and processing time
+        Returns structured detection results, processing time, game analysis, and optional visualization
+        
+        Args:
+            image_data: Image data as bytes
+            filename: Name of the uploaded file
+            analyze_game: Whether to perform complete game analysis
+            create_visualization: Whether to create annotated image visualization
+            
+        Returns:
+            Tuple of (detection_results, processing_time, game_analysis, visualization_path)
         """
         start_time = time.time()
         
@@ -125,19 +135,38 @@ class ImageProcessor:
             # Get image dimensions for spatial analysis
             image_shape = (image.height, image.width)
             
+            visualization_path = None
+            
             if self.ml_enabled:
                 # Use ML pipeline for detection
-                results = self._ml_card_detection(image, image_shape)
+                if analyze_game:
+                    results, game_analysis = self._ml_card_detection_with_game_analysis(image, image_shape)
+                    
+                    # Create visualization if requested
+                    if create_visualization and game_analysis:
+                        visualization_path = self._create_game_visualization(
+                            image, results, game_analysis, filename
+                        )
+                else:
+                    results = self._ml_card_detection(image, image_shape)
+                    game_analysis = None
             else:
                 # Fall back to mock detection
                 results = self._mock_card_detection_enhanced(np.array(image))
+                game_analysis = None
             
             processing_time = time.time() - start_time
             
             logger.info(f"Processed image {filename} in {processing_time:.3f}s")
             logger.info(f"Detected {len(results)} cards")
             
-            return results, processing_time
+            if analyze_game and game_analysis:
+                logger.info(f"Game analysis: {game_analysis.get('winner', {}).get('name', 'No winner determined')}")
+            
+            if visualization_path:
+                logger.info(f"Created visualization: {visualization_path}")
+            
+            return results, processing_time, game_analysis, visualization_path
             
         except Exception as e:
             logger.error(f"Image processing failed: {str(e)}")
@@ -454,3 +483,104 @@ class ImageProcessor:
     def get_supported_formats(self) -> List[str]:
         """Get list of supported image formats"""
         return list(self.supported_formats)
+    
+    def _ml_card_detection_with_game_analysis(self, image: Image.Image, image_shape: Tuple[int, int]) -> Tuple[List[Dict], Dict]:
+        """
+        Perform ML-based card detection with complete poker game analysis
+        
+        Args:
+            image: PIL Image object
+            image_shape: (height, width) of the image
+            
+        Returns:
+            Tuple of (detection results, game analysis)
+        """
+        try:
+            # Step 1: Detect cards and analyze the poker game
+            detections, inference_time, processing_report, game_analysis = self.card_detector.analyze_poker_game_from_pil(image)
+            
+            if not detections:
+                logger.warning("No cards detected by ML model")
+                return [], {}
+                
+            # Step 2: Convert detection objects to dictionaries
+            results = []
+            for detection in detections:
+                detection_dict = {
+                    'card': detection.card_name,
+                    'confidence': float(detection.confidence),
+                    'bbox': detection.bbox,
+                    'center': list(detection.center)
+                }
+                results.append(detection_dict)
+            
+            logger.info(f"ML detection complete: {len(results)} cards, inference: {inference_time:.3f}s")
+            
+            return results, game_analysis
+            
+        except Exception as e:
+            logger.error(f"ML game analysis failed: {str(e)}")
+            # Fall back to regular detection
+            return self._ml_card_detection(image, image_shape), {}
+    
+    def _create_game_visualization(self, image: Image.Image, detection_results: List[Dict], 
+                                 game_analysis: Dict, filename: str) -> Optional[str]:
+        """
+        Create a visualization of the poker game with winner announcement
+        
+        Args:
+            image: PIL Image object
+            detection_results: Detection results from ML processing
+            game_analysis: Complete game analysis results
+            filename: Original filename for naming the visualization
+            
+        Returns:
+            Path to the created visualization image, or None if failed
+        """
+        try:
+            # Import visualizer
+            from .poker_visualizer import PokerGameVisualizer
+            
+            # Convert PIL image to OpenCV format
+            image_array = np.array(image)
+            if len(image_array.shape) == 3:
+                image_cv = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+            else:
+                image_cv = image_array
+            
+            # Convert detection results to the format expected by visualizer
+            detection_dicts = []
+            for result in detection_results:
+                if isinstance(result, dict) and result.get('cards'):
+                    for card in result['cards']:
+                        detection_dict = {
+                            'card_name': card.get('name', ''),
+                            'confidence': card.get('confidence', 0.0),
+                            'bbox': card.get('bbox', [0, 0, 0, 0]),
+                            'center': card.get('center', [0, 0])
+                        }
+                        detection_dicts.append(detection_dict)
+            
+            # Create visualizer and generate annotated image
+            visualizer = PokerGameVisualizer()
+            annotated_image = visualizer.visualize_game_result(
+                image_cv, detection_dicts, game_analysis
+            )
+            
+            # Generate output filename
+            base_name = os.path.splitext(filename)[0] if filename else "poker_game"
+            output_filename = f"{base_name}_annotated.jpg"
+            output_path = os.path.join("visualizations", output_filename)
+            
+            # Create output directory if it doesn't exist
+            os.makedirs("visualizations", exist_ok=True)
+            
+            # Save the annotated image
+            cv2.imwrite(output_path, annotated_image)
+            
+            logger.info(f"Created game visualization: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Failed to create game visualization: {str(e)}")
+            return None

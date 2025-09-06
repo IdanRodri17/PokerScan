@@ -76,8 +76,8 @@ class PokerDetectionOptimizer:
         filtered_detections = []
         
         for card_name, conf in detections:
-            # Remove low-confidence detections that aren't expected
-            if card_name not in self.expected_cards and conf < 0.5:
+            # Remove low-confidence detections that aren't expected (more lenient)
+            if card_name not in self.expected_cards and conf < 0.25:
                 print(f"🗑️ Removed false positive: {card_name} (low confidence: {conf:.3f})")
                 continue
                 

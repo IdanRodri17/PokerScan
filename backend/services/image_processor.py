@@ -161,7 +161,9 @@ class ImageProcessor:
             logger.info(f"Detected {len(results)} cards")
             
             if analyze_game and game_analysis:
-                logger.info(f"Game analysis: {game_analysis.get('winner', {}).get('name', 'No winner determined')}")
+                winner_info = game_analysis.get('winner') if game_analysis else None
+                winner_name = winner_info.get('name') if winner_info else 'No winner determined'
+                logger.info(f"Game analysis: {winner_name}")
             
             if visualization_path:
                 logger.info(f"Created visualization: {visualization_path}")

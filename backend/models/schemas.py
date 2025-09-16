@@ -1,6 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
+import json
 
 class CardDetection(BaseModel):
     """Individual card detection result"""
@@ -69,7 +70,7 @@ class ImageUploadResponse(BaseModel):
     success: bool
     message: str
     filename: Optional[str] = None
-    timestamp: datetime
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
     detection_results: Optional[List[Dict[str, Any]]] = None  # Flexible structure for different section types
     processing_time: Optional[float] = None
     game_analysis: Optional[GameAnalysis] = None  # Complete poker game analysis
@@ -91,11 +92,11 @@ class HealthCheckResponse(BaseModel):
     model_config = {"protected_namespaces": ()}
     
     status: str
-    timestamp: datetime
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
     version: str
     model_status: Optional[ModelStatusResponse] = None
 
 class ErrorResponse(BaseModel):
     error: str
     detail: str
-    timestamp: datetime
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())

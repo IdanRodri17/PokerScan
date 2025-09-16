@@ -51,7 +51,6 @@ async def health_check():
     
     return HealthCheckResponse(
         status="healthy",
-        timestamp=datetime.now(),
         version="1.0.0",
         model_status=ModelStatusResponse(**model_status)
     )
@@ -138,7 +137,6 @@ async def upload_image(
             success=True,
             message="Image processed successfully",
             filename=file.filename,
-            timestamp=datetime.now(),
             detection_results=detection_results,
             cards_detected=simple_card_names,  # Backward compatibility
             processing_time=processing_time,
@@ -175,8 +173,7 @@ async def http_exception_handler(request, exc):
         status_code=exc.status_code,
         content=ErrorResponse(
             error=exc.detail,
-            detail=str(exc),
-            timestamp=datetime.now()
+            detail=str(exc)
         ).dict()
     )
 
@@ -188,8 +185,7 @@ async def general_exception_handler(request, exc):
         status_code=500,
         content=ErrorResponse(
             error="Internal server error",
-            detail=str(exc),
-            timestamp=datetime.now()
+            detail=str(exc)
         ).dict()
     )
 

@@ -116,56 +116,187 @@ class PokerGameAnalyzer:
     
     def _group_cards_by_position(self, detections: List[Dict], image_shape: Tuple[int, int]) -> Dict:
         """
-        Group cards by their position on the table
+        Improved grouping logic based on strict spatial zones
         """
         height, width = image_shape
         
         # Sort detections by Y position
         sorted_by_y = sorted(detections, key=lambda x: x['center'][1])
         
-        # Define regions based on typical poker layout
+        # Initialize groups
         groups = {
-            'player1': [],  # Top of image
-            'community': [],  # Middle of image
-            'player2': []  # Bottom of image
+            'player1': [],
+            'community': [],
+            'player2': []
         }
+        
+        # IMPROVED ZONE DEFINITIONS
+        # Based on your test results, we need stricter boundaries
+        TOP_ZONE_LIMIT = 0.20      # Top 20% for Player 1
+        MIDDLE_ZONE_START = 0.25   # Community starts at 25%
+        MIDDLE_ZONE_END = 0.70     # Community ends at 70%
+        BOTTOM_ZONE_START = 0.75   # Bottom 25% for Player 2
+        
+        # First pass: Rough grouping
+        top_zone = []
+        middle_zone = []
+        bottom_zone = []
         
         for det in sorted_by_y:
             y = det['center'][1]
             y_ratio = y / height
             
-            if y_ratio < 0.25:
-                # Top quarter - Player 1
-                groups['player1'].append(det)
-            elif y_ratio > 0.85:
-                # Very bottom - treat as community (likely misplaced)
-                groups['community'].append(det)
-            elif y_ratio > 0.65:
-                # Bottom region - Player 2
-                groups['player2'].append(det)
+            if y_ratio <= TOP_ZONE_LIMIT:
+                top_zone.append(det)
+            elif y_ratio >= BOTTOM_ZONE_START:
+                bottom_zone.append(det)
+            elif MIDDLE_ZONE_START <= y_ratio <= MIDDLE_ZONE_END:
+                middle_zone.append(det)
             else:
-                # Middle region - Community cards
-                groups['community'].append(det)
+                # Transition zones - assign based on nearest boundary
+                if y_ratio < MIDDLE_ZONE_START:
+                    # Between top and middle - check which is closer
+                    if y_ratio - TOP_ZONE_LIMIT < MIDDLE_ZONE_START - y_ratio:
+                        top_zone.append(det)
+                    else:
+                        middle_zone.append(det)
+                else:
+                    # Between middle and bottom
+                    if y_ratio - MIDDLE_ZONE_END < BOTTOM_ZONE_START - y_ratio:
+                        middle_zone.append(det)
+                    else:
+                        bottom_zone.append(det)
+        
+        # Debug logging
+        logger.info("🔍 Initial zone assignment:")
+        logger.info(f"  Top zone ({TOP_ZONE_LIMIT*100:.0f}%): {[d['card_name'] for d in top_zone]}")
+        logger.info(f"  Middle zone ({MIDDLE_ZONE_START*100:.0f}-{MIDDLE_ZONE_END*100:.0f}%): {[d['card_name'] for d in middle_zone]}")
+        logger.info(f"  Bottom zone ({BOTTOM_ZONE_START*100:.0f}%+): {[d['card_name'] for d in bottom_zone]}")
+        
+        # Second pass: Apply poker rules
+        # Player 1 - max 2 cards, leftmost if more
+        if len(top_zone) > 2:
+            top_zone_sorted = sorted(top_zone, key=lambda x: x['center'][0])
+            groups['player1'] = top_zone_sorted[:2]
+            # Extra cards go to community
+            for card in top_zone_sorted[2:]:
+                middle_zone.append(card)
+                logger.info(f"  Moved {card['card_name']} from player1 to community (excess)")
+        else:
+            groups['player1'] = top_zone
+        
+        # Player 2 - max 2 cards, leftmost if more
+        if len(bottom_zone) > 2:
+            bottom_zone_sorted = sorted(bottom_zone, key=lambda x: x['center'][0])
+            groups['player2'] = bottom_zone_sorted[:2]
+            # Extra cards go to community
+            for card in bottom_zone_sorted[2:]:
+                middle_zone.append(card)
+                logger.info(f"  Moved {card['card_name']} from player2 to community (excess)")
+        else:
+            groups['player2'] = bottom_zone
+        
+        # Community - max 5 cards, most centered if more
+        if len(middle_zone) > 5:
+            # Keep 5 most centered cards
+            center_x = width / 2
+            middle_zone_sorted = sorted(middle_zone, key=lambda x: abs(x['center'][0] - center_x))
+            groups['community'] = middle_zone_sorted[:5]
+            logger.info(f"  Limited community to 5 most centered cards")
+        else:
+            groups['community'] = middle_zone
         
         # Sort each group by X position (left to right)
         for key in groups:
             groups[key] = sorted(groups[key], key=lambda x: x['center'][0])
         
-        # Debug: Log card positions and groupings
-        logger.info("🔍 Card grouping analysis:")
+        # Final logging
+        logger.info("🔧 Final card groups:")
+        total = 0
         for group_name, cards in groups.items():
             card_names = [c['card_name'] for c in cards]
-            logger.info(f"  {group_name}: {card_names}")
-            for card in cards:
-                logger.info(f"    {card['card_name']} at y={card['center'][1]:.0f} (ratio: {card['center'][1]/image_shape[0]:.2f})")
+            logger.info(f"  {group_name}: {card_names} ({len(cards)} cards)")
+            total += len(cards)
+        logger.info(f"  Total: {total} cards")
         
-        # Validate and fix card counts
-        groups = self._fix_card_groups(groups)
-        
-        # Final validation
+        # Validate
         self._validate_card_groups(groups)
         
         return groups
+
+    def _validate_card_groups(self, groups: Dict):
+        """Validate that card groups make sense for poker"""
+        warnings = []
+        
+        # Each player should have exactly 2 cards (or 0 if not playing)
+        for player in ['player1', 'player2']:
+            count = len(groups[player])
+            if count != 0 and count != 2:
+                warnings.append(f"{player} has {count} cards, expected 0 or 2")
+        
+        # Community should have 0 (preflop), 3 (flop), 4 (turn), or 5 (river) cards
+        comm_count = len(groups['community'])
+        if comm_count not in [0, 3, 4, 5]:
+            warnings.append(f"Community has {comm_count} cards, expected 0, 3, 4, or 5")
+        
+        # Total should be 7 (one player) or 9 (two players)
+        total = sum(len(cards) for cards in groups.values())
+        if total not in [7, 9]:
+            warnings.append(f"Total card count is {total}, expected 7 or 9")
+        
+        # Log warnings
+        if warnings:
+            for warning in warnings:
+                logger.warning(f"⚠️ {warning}")
+    
+    def _create_game_state(self, grouped_cards: Dict) -> GameState:
+        """Create GameState from grouped cards"""
+        # Parse community cards
+        community_cards = []
+        for det in grouped_cards['community']:
+            card = self._parse_card(det['card_name'])
+            if card:
+                community_cards.append(card)
+        
+        # Create players
+        players = []
+        
+        # Player 1 (top)
+        if len(grouped_cards['player1']) >= 2:
+            player1_cards = []
+            for det in grouped_cards['player1'][:2]:
+                card = self._parse_card(det['card_name'])
+                if card:
+                    player1_cards.append(card)
+            
+            if len(player1_cards) == 2:  # Only add if we have exactly 2 cards
+                players.append(Player(
+                    id=1,
+                    name="Player 1 (Top)",
+                    hole_cards=player1_cards,
+                    position="top"
+                ))
+        
+        # Player 2 (bottom)
+        if len(grouped_cards['player2']) >= 2:
+            player2_cards = []
+            for det in grouped_cards['player2'][:2]:
+                card = self._parse_card(det['card_name'])
+                if card:
+                    player2_cards.append(card)
+            
+            if len(player2_cards) == 2:  # Only add if we have exactly 2 cards
+                players.append(Player(
+                    id=2,
+                    name="Player 2 (Bottom)",
+                    hole_cards=player2_cards,
+                    position="bottom"
+                ))
+        
+        return GameState(
+            community_cards=community_cards,
+            players=players
+        )
     
     def _fix_card_groups(self, groups: Dict) -> Dict:
         """Fix card groups to ensure proper poker layout"""
@@ -254,17 +385,31 @@ class PokerGameAnalyzer:
         )
     
     def _parse_card(self, card_str: str) -> Optional[Card]:
-        """Parse card string into Card object"""
-        card_str = card_str.upper()
+        """Parse card string into Card object - handles various formats"""
+        if not card_str:
+            return None
+            
+        card_str = card_str.strip().upper()
         
-        # Handle different formats
+        # Handle different formats: "KS", "10D", "TC", etc.
         if len(card_str) >= 2:
-            if card_str[:-1] in self.rank_values:
+            # Check for 10/T
+            if card_str.startswith('10'):
+                rank = '10'
+                suit = card_str[2] if len(card_str) > 2 else card_str[-1]
+            elif card_str[0] == 'T':
+                rank = '10'  # Convert T to 10 internally
+                suit = card_str[1]
+            elif card_str[:-1] in self.rank_values:
                 rank = card_str[:-1]
                 suit = card_str[-1]
             else:
                 rank = card_str[0]
-                suit = card_str[1]
+                suit = card_str[1] if len(card_str) > 1 else 'S'  # Default to spades if missing
+            
+            # Normalize rank
+            if rank == 'T':
+                rank = '10'
             
             if rank in self.rank_values:
                 return Card(

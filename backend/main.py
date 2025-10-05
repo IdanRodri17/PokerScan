@@ -7,8 +7,12 @@ import os
 from datetime import datetime
 from io import BytesIO
 
-from models.schemas import ImageUploadResponse, HealthCheckResponse, ErrorResponse, ModelStatusResponse
+from models.schemas import (
+    ImageUploadResponse, HealthCheckResponse, ErrorResponse, ModelStatusResponse,
+    EvaluateWinnerRequest, EvaluateWinnerResponse, GameAnalysis, PlayerInfo, WinnerInfo
+)
 from services.image_processor import ImageProcessor
+from ml.hand_evaluator import create_hand_evaluator
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +40,7 @@ app.add_middleware(
 
 # Initialize services
 image_processor = ImageProcessor()
+hand_evaluator = create_hand_evaluator()
 
 # Create visualizations directory if it doesn't exist
 os.makedirs("visualizations", exist_ok=True)
@@ -112,7 +117,7 @@ async def upload_image(
         logger.info(f"Detection results: {detection_results}")
         logger.info(f"Simple card names extracted: {simple_card_names}")
         
-        # Convert game analysis to proper format if available
+        # Convert game analysis to proper format if available, or create fallback
         game_analysis_response = None
         if game_analysis:
             from models.schemas import GameAnalysis, PlayerInfo, WinnerInfo
@@ -132,6 +137,31 @@ async def upload_image(
                 tie=game_analysis.get('tie', False),
                 tied_players=game_analysis.get('tied_players')
             )
+        elif simple_card_names:
+            # Create fallback game analysis when ML analysis fails but we have detected cards
+            from models.schemas import GameAnalysis, PlayerInfo
+            
+            # Simple fallback: assume first 2 cards are player 1, rest are community
+            fallback_players = []
+            community_cards = simple_card_names[2:] if len(simple_card_names) > 2 else []
+            
+            if len(simple_card_names) >= 2:
+                fallback_players.append(PlayerInfo(
+                    id=1,
+                    name="Player 1",
+                    position="Button",
+                    hole_cards=simple_card_names[:2],
+                    hand_description="Cards detected (analysis unavailable)"
+                ))
+            
+            game_analysis_response = GameAnalysis(
+                community_cards=community_cards,
+                players=fallback_players,
+                winner=None,  # No winner determination in fallback
+                tie=False
+            )
+            
+            logger.info(f"Created fallback game analysis with {len(fallback_players)} player(s) and {len(community_cards)} community cards")
         
         return ImageUploadResponse(
             success=True,
@@ -164,6 +194,158 @@ async def get_model_status():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get model status: {str(e)}"
+        )
+
+@app.get("/model-status")
+async def get_simple_model_status():
+    """Simple model status endpoint for debugging (as suggested by Opus)"""
+    try:
+        status = image_processor.get_model_status()
+        return {
+            "ml_enabled": status.get("ml_enabled", False),
+            "model_loaded": status.get("model_loaded", False),
+            "using_mock_detection": status.get("using_mock_detection", True),
+            "device": status.get("model_device", "unknown"),
+            "debug_info": status
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "ml_enabled": False,
+            "model_loaded": False,
+            "using_mock_detection": True
+        }
+
+@app.post("/evaluate-winner", response_model=EvaluateWinnerResponse)
+async def evaluate_winner(request: EvaluateWinnerRequest):
+    """
+    Evaluate winner from manually corrected cards
+
+    Args:
+        request: Contains player1_cards, community_cards, player2_cards
+
+    Returns:
+        Complete game analysis with winner information
+    """
+    try:
+        # Validate input
+        if len(request.player1_cards) != 2:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Player 1 must have exactly 2 cards, got {len(request.player1_cards)}"
+            )
+
+        if len(request.player2_cards) != 2:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Player 2 must have exactly 2 cards, got {len(request.player2_cards)}"
+            )
+
+        if not (3 <= len(request.community_cards) <= 5):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Community cards must be 3-5 cards, got {len(request.community_cards)}"
+            )
+
+        logger.info(f"Evaluating winner - Player 1: {request.player1_cards}, Community: {request.community_cards}, Player 2: {request.player2_cards}")
+
+        # Evaluate both players' hands
+        player1_result = hand_evaluator.evaluate_community_and_hole_cards(
+            request.community_cards, request.player1_cards
+        )
+
+        player2_result = hand_evaluator.evaluate_community_and_hole_cards(
+            request.community_cards, request.player2_cards
+        )
+
+        # Validate both hands
+        if not player1_result.get('valid') or not player2_result.get('valid'):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid cards or insufficient cards for evaluation"
+            )
+
+        # Determine winner
+        player1_strength = player1_result['hand_strength']
+        player2_strength = player2_result['hand_strength']
+
+        is_tie = player1_strength == player2_strength
+        winner_id = None
+        winner_name = None
+        winning_hand = None
+
+        if not is_tie:
+            if player1_strength > player2_strength:
+                winner_id = 1
+                winner_name = "Player 1"
+                winning_hand = player1_result['hand_rank']
+            else:
+                winner_id = 2
+                winner_name = "Player 2"
+                winning_hand = player2_result['hand_rank']
+
+        # Create player info objects
+        players = [
+            PlayerInfo(
+                id=1,
+                name="Player 1",
+                position="Button",
+                hole_cards=request.player1_cards,
+                best_hand=', '.join(player1_result['best_5_cards']),
+                hand_description=player1_result['hand_rank']
+            ),
+            PlayerInfo(
+                id=2,
+                name="Player 2",
+                position="Big Blind",
+                hole_cards=request.player2_cards,
+                best_hand=', '.join(player2_result['best_5_cards']),
+                hand_description=player2_result['hand_rank']
+            )
+        ]
+
+        # Create winner info if not a tie
+        winner_info = None
+        tied_players = None
+
+        if is_tie:
+            tied_players = [
+                {"id": 1, "name": "Player 1", "hand": player1_result['hand_rank']},
+                {"id": 2, "name": "Player 2", "hand": player2_result['hand_rank']}
+            ]
+        else:
+            winner_info = WinnerInfo(
+                id=winner_id,
+                name=winner_name,
+                winning_hand=winning_hand
+            )
+
+        # Create game analysis
+        game_analysis = GameAnalysis(
+            community_cards=request.community_cards,
+            players=players,
+            winner=winner_info,
+            tie=is_tie,
+            tied_players=tied_players
+        )
+
+        logger.info(f"Winner evaluation complete: {winner_name if not is_tie else 'TIE'}")
+
+        return EvaluateWinnerResponse(
+            success=True,
+            message="Winner evaluated successfully" if not is_tie else "Game is a tie",
+            game_analysis=game_analysis
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Winner evaluation failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to evaluate winner: {str(e)}"
         )
 
 @app.exception_handler(HTTPException)

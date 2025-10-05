@@ -1,84 +1,61 @@
-"""
-YOLOv8 Card Detector Wrapper for PokerVision
-
-This module provides a wrapper around YOLOv8 for poker card detection,
-including model loading, inference, and result processing.
-"""
-
-import os
-import time
 import logging
-from typing import List, Dict, Tuple, Optional
-from pathlib import Path
+import time
 import yaml
 import numpy as np
-import cv2
+from pathlib import Path
+from typing import List, Dict, Optional, Tuple, Union
+from dataclasses import dataclass
 from PIL import Image
-import torch
+import cv2
 from ultralytics import YOLO
-from .duplicate_handler import create_duplicate_handler
-from .image_enhancer import create_poker_enhancer
-from .opus_preprocessing import preprocess_poker_image
-from .final_optimizer import create_poker_optimizer
-from .advanced_suit_preprocessor import preprocess_poker_image_advanced
-from .poker_context_processor import apply_poker_context
-from .poker_validator import StrictPokerValidator
-from .poker_game_analyzer import analyze_poker_game
+import torch
 
 logger = logging.getLogger(__name__)
 
-
+@dataclass
 class CardDetection:
-    """Represents a single card detection result"""
-    
-    def __init__(self, card_name: str, confidence: float, bbox: List[float], center: Tuple[float, float]):
-        self.card_name = card_name
-        self.confidence = confidence
-        self.bbox = bbox  # [x1, y1, x2, y2]
-        self.center = center  # (x, y)
-        
-    def to_dict(self) -> Dict:
-        return {
-            'card': self.card_name,
-            'confidence': float(self.confidence),
-            'bbox': self.bbox,
-            'center': list(self.center)
-        }
-
+    """Data class for card detection results"""
+    card_name: str
+    confidence: float
+    bbox: List[float]  # [x1, y1, x2, y2]
+    center: Tuple[float, float]  # (x, y)
 
 class YOLOv8CardDetector:
-    """YOLOv8-based poker card detector"""
+    """Fixed YOLOv8-based poker card detector with correct class mapping"""
+    
+    # Class names will be loaded directly from model - no hardcoded mapping needed
+    MODEL_CLASS_NAMES = {}  # Will be populated from model
+    MODEL_TO_CONFIG = {}    # No longer needed
     
     def __init__(self, config_path: Optional[str] = None):
-        """
-        Initialize the card detector
-        
-        Args:
-            config_path: Path to configuration file
-        """
+        """Initialize the fixed card detector"""
         self.config_path = config_path or self._get_default_config_path()
         self.config = self._load_config()
         self.model = None
-        self.class_names = self._load_class_names()
         self.device = self._get_device()
-        
-        # Performance tracking
         self.inference_times = []
+        # Add class_names for compatibility - now using correct mapping
+        self.class_names = self.MODEL_CLASS_NAMES
         
-        # Initialize duplicate handler
-        self.duplicate_handler = create_duplicate_handler(
-            iou_threshold=self.config.get('model', {}).get('iou_threshold', 0.45) * 0.7,  # More strict for duplicates
-            confidence_weight=0.8  # Prioritize confidence for poker accuracy
-        )
+        logger.info(f"Initialized Fixed YOLOv8CardDetector with device: {self.device}")
+    
+    def convert_card_name(self, model_name: str) -> str:
+        """
+        Convert from model format (10C, AS) to app format (Tc, As)
+        Handles the naming convention mismatch
+        """
+        if not model_name or len(model_name) < 2:
+            return model_name
+            
+        # Handle 10 -> T conversion
+        if model_name.startswith('10'):
+            rank = 'T'
+            suit = model_name[2].lower() if len(model_name) > 2 else model_name[-1].lower()
+        else:
+            rank = model_name[0]
+            suit = model_name[1].lower()
         
-        # Initialize image enhancer
-        self.image_enhancer = create_poker_enhancer()
-        
-        # Initialize poker optimizer for final post-processing
-        expected_cards = ["AS", "QS", "4H", "10S", "AD", "KS", "JS"]  # Based on your test image
-        self.poker_optimizer = create_poker_optimizer(expected_cards)
-        
-        logger.info(f"Initialized YOLOv8CardDetector with device: {self.device}")
+        return f"{rank}{suit}"
     
     def _get_default_config_path(self) -> str:
         """Get default config file path"""
@@ -90,482 +67,545 @@ class YOLOv8CardDetector:
         try:
             with open(self.config_path, 'r') as f:
                 config = yaml.safe_load(f)
-            logger.info(f"Loaded configuration from {self.config_path}")
+            # OPTIMIZED: Balanced thresholds for real-world poker images
+            config['model']['confidence_threshold'] = 0.25  # Balanced - catches real cards, filters noise
+            config['model']['iou_threshold'] = 0.30         # Better NMS
+            config['model']['input_size'] = 1280            # Keep high resolution
+            logger.info(f"Loaded configuration with optimized settings (conf=0.25)")
             return config
         except Exception as e:
             logger.error(f"Failed to load config: {e}")
-            return self._get_default_config()
-    
-    def _get_default_config(self) -> Dict:
-        """Get default configuration if file loading fails"""
-        return {
-            'model': {
-                'name': 'yolov8n',
-                'confidence_threshold': 0.3,
-                'iou_threshold': 0.45,
-                'max_detections': 300,
-                'input_size': 640
+            # Return default config with optimized settings
+            return {
+                'model': {
+                    'confidence_threshold': 0.25,  # Balanced threshold
+                    'iou_threshold': 0.30,
+                    'input_size': 1280,
+                    'max_detections': 100  # Reduced from 300 - poker game has max 9 cards
+                }
             }
-        }
-    
-    def _load_class_names(self) -> Dict[int, str]:
-        """Load class names from configuration"""
-        try:
-            return self.config.get('classes', {})
-        except Exception as e:
-            logger.error(f"Failed to load class names: {e}")
-            return {}
     
     def _get_device(self) -> str:
-        """Determine the best available device"""
-        device_config = self.config.get('model', {}).get('device', 'auto')
-        
-        if device_config == 'auto':
-            if torch.cuda.is_available():
-                device = 'cuda'
-            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                device = 'mps'
-            else:
-                device = 'cpu'
+        """Determine computation device"""
+        if torch.cuda.is_available():
+            return 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            return 'mps'
         else:
-            device = device_config
-            
-        logger.info(f"Using device: {device}")
-        return device
+            return 'cpu'
     
-    def load_model(self, model_path: Optional[str] = None) -> bool:
-        """
-        Load YOLOv8 model with PyTorch 2.6+ compatibility
-        
-        Args:
-            model_path: Path to trained model file. If None, uses pretrained model.
-            
-        Returns:
-            bool: True if model loaded successfully
-        """
+    def load_model(self, model_path: str) -> bool:
+        """Load YOLOv8 model with PyTorch 2.6 compatibility fix"""
+        print(f"🔧 DEBUG: Loading YOLO model from: {model_path}")
         try:
-            # Fix PyTorch 2.6+ weights_only issue for YOLO models
-            self._patch_torch_load()
+            # Check if ultralytics is available
+            print("🔍 DEBUG: Importing ultralytics...")
+            from ultralytics import YOLO
+            print("✅ DEBUG: ultralytics imported successfully")
             
-            if model_path and os.path.exists(model_path):
-                logger.info(f"Loading trained model from {model_path}")
-                self.model = YOLO(model_path)
-            else:
-                # Use pretrained model for initial testing
-                model_name = self.config.get('model', {}).get('name', 'yolov8n')
-                logger.info(f"Loading pretrained {model_name} model")
-                self.model = YOLO(f"{model_name}.pt")
+            # Check if file exists
+            import os
+            if not os.path.exists(model_path):
+                print(f"❌ DEBUG: Model file does not exist: {model_path}")
+                return False
             
-            # Move model to appropriate device
-            if hasattr(self.model, 'to'):
-                self.model.to(self.device)
-                
-            logger.info("Model loaded successfully")
-            return True
+            print(f"✅ DEBUG: Model file exists, size: {os.path.getsize(model_path) / 1024 / 1024:.1f} MB")
             
-        except Exception as e:
-            logger.error(f"Failed to load model: {e}")
-            return False
-        finally:
-            # Restore original torch.load
-            self._restore_torch_load()
-    
-    def _patch_torch_load(self):
-        """Temporarily patch torch.load to handle YOLOv8 models in PyTorch 2.6+"""
-        if hasattr(torch.serialization, 'add_safe_globals'):
-            try:
-                # Add safe globals for YOLO components
+            # Fix for PyTorch 2.6+
+            if hasattr(torch.serialization, 'add_safe_globals'):
                 torch.serialization.add_safe_globals([
                     'ultralytics.nn.tasks.DetectionModel',
-                    'ultralytics.nn.tasks.SegmentationModel', 
-                    'ultralytics.nn.tasks.ClassificationModel',
-                    'ultralytics.nn.tasks.PoseModel',
-                    'collections.OrderedDict',
-                    'torch.nn.modules.container.ModuleList',
-                    'torch.nn.modules.container.Sequential'
+                    'collections.OrderedDict'
                 ])
-                logger.debug("Added safe globals for PyTorch 2.6+")
-            except Exception as e:
-                logger.debug(f"Could not add safe globals: {e}")
-        
-        # Store original torch.load and patch it
-        self._original_torch_load = torch.load
-        
-        def patched_load(*args, **kwargs):
-            # Force weights_only=False for model loading
-            kwargs['weights_only'] = False
-            return self._original_torch_load(*args, **kwargs)
-        
-        torch.load = patched_load
-    
-    def _restore_torch_load(self):
-        """Restore original torch.load function"""
-        if hasattr(self, '_original_torch_load'):
-            torch.load = self._original_torch_load
-    
-    def detect_cards(self, image: np.ndarray, return_raw: bool = False):
-        """
-        Detect poker cards in an image
-        
-        Args:
-            image: Input image as numpy array (BGR format)
-            return_raw: Whether to return raw YOLO results
             
-        Returns:
-            Tuple of (card detections, inference time)
-        """
+            # Temporarily override torch.load for compatibility
+            original_torch_load = torch.load
+            torch.load = lambda *args, **kwargs: original_torch_load(*args, **dict(kwargs, weights_only=False))
+            
+            # Load model
+            print("🔧 DEBUG: Creating YOLO model object...")
+            self.model = YOLO(model_path)
+            print(f"✅ DEBUG: YOLO model created: {self.model is not None}")
+            
+            # CRITICAL FIX: Get class names directly from the model (native format)
+            print("🔧 DEBUG: Getting class names from model...")
+            if hasattr(self.model, 'names') and self.model.names:
+                # Use model's native class names directly - no conversion needed
+                self.MODEL_CLASS_NAMES = self.model.names  # Direct reference to model's names
+                self.class_names = self.model.names        # Same reference
+                print(f"✅ DEBUG: Loaded {len(self.MODEL_CLASS_NAMES)} class names from model")
+                print(f"🔍 DEBUG: First 10 classes: {[self.model.names[i] for i in range(min(10, len(self.model.names)))]}")
+                print(f"🔍 DEBUG: All class names: {list(self.model.names.values())}")
+            else:
+                print("⚠️ DEBUG: Could not get class names from model, using fallback")
+            
+            print(f"🔧 DEBUG: Moving model to device: {self.device}")
+            self.model.to(self.device)
+            print("✅ DEBUG: Model moved to device")
+            
+            # Restore original torch.load
+            torch.load = original_torch_load
+            
+            # Test the model with a dummy prediction
+            print("🔧 DEBUG: Testing model with dummy prediction...")
+            import numpy as np
+            dummy_img = np.zeros((640, 640, 3), dtype=np.uint8)
+            test_results = self.model(dummy_img, verbose=False)
+            print(f"✅ DEBUG: Model inference test successful! Detected {len(test_results[0].boxes) if test_results[0].boxes else 0} objects")
+            
+            logger.info(f"Successfully loaded model from {model_path}")
+            print(f"✅ DEBUG: Model loaded successfully from {model_path}")
+            return True
+            
+        except ImportError as e:
+            print(f"❌ DEBUG: Import error - ultralytics not available: {e}")
+            logger.error(f"Import error loading model: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ DEBUG: Failed to load model: {e}")
+            logger.error(f"Failed to load model: {e}")
+            import traceback
+            print("❌ DEBUG: Full traceback:")
+            traceback.print_exc()
+            return False
+    
+    def preprocess_poker_image(self, image: Union[np.ndarray, Image.Image]) -> np.ndarray:
+        """Enhanced preprocessing for poker table images (Opus's fix)"""
+        # Convert to numpy if PIL
+        if isinstance(image, Image.Image):
+            img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        else:
+            img = image.copy()
+        
+        # 1. Remove green felt bias
+        img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        img_lab[:, :, 1] = cv2.subtract(img_lab[:, :, 1], 10)
+        
+        # 2. Enhance contrast for cards
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        img_lab[:, :, 0] = clahe.apply(img_lab[:, :, 0])
+        img = cv2.cvtColor(img_lab, cv2.COLOR_LAB2BGR)
+        
+        # 3. Sharpen cards
+        kernel = np.array([[-1,-1,-1,-1,-1],
+                          [-1, 2, 2, 2,-1],
+                          [-1, 2, 8, 2,-1],
+                          [-1, 2, 2, 2,-1],
+                          [-1,-1,-1,-1,-1]]) / 8.0
+        img = cv2.filter2D(img, -1, kernel)
+        
+        # 4. Enhance red colors for hearts/diamonds
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        red_mask = cv2.inRange(hsv, (0, 50, 50), (10, 255, 255)) + \
+                   cv2.inRange(hsv, (170, 50, 50), (180, 255, 255))
+        hsv[:, :, 1] = np.where(red_mask > 0, 
+                                np.clip(hsv[:, :, 1] * 1.2, 0, 255).astype(np.uint8),
+                                hsv[:, :, 1])
+        img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        
+        # 5. Normalize lighting
+        img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
+        img_yuv[:, :, 0] = cv2.equalizeHist(img_yuv[:, :, 0])
+        img = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
+        
+        return img
+    
+    def detect_cards_from_pil(self, pil_image: Image.Image) -> Tuple[List[CardDetection], float]:
+        """Detect cards from PIL image with all fixes applied"""
         if self.model is None:
-            logger.error("Model not loaded. Call load_model() first.")
+            logger.error("Model not loaded")
             return [], 0.0
         
         start_time = time.time()
         
         try:
-            # Get model configuration
-            model_config = self.config.get('model', {})
-            conf_threshold = model_config.get('confidence_threshold', 0.3)
-            iou_threshold = model_config.get('iou_threshold', 0.45)
-            max_det = model_config.get('max_detections', 300)
+            # Skip preprocessing - use image directly as tests showed it works fine
+            img_np = np.array(pil_image)
             
-            # Run inference
+            # FIXED: Use production-ready thresholds to avoid false positives
+            conf_threshold = self.config.get('model', {}).get('confidence_threshold', 0.50)
+            iou_threshold = self.config.get('model', {}).get('iou_threshold', 0.30)
+
             results = self.model(
-                image,
-                conf=conf_threshold,
-                iou=iou_threshold,
-                max_det=max_det,
+                img_np,
+                conf=conf_threshold,   # High confidence threshold (0.50)
+                iou=iou_threshold,     # Proper NMS threshold (0.30)
+                imgsz=1280,            # High resolution for card details
                 verbose=False
             )
             
             inference_time = time.time() - start_time
             self.inference_times.append(inference_time)
             
-            # Process results
+            # Process results with correct class mapping
             detections = []
-            if results and len(results) > 0:
-                result = results[0]  # Single image
+            if results and len(results) > 0 and results[0].boxes is not None:
+                boxes = results[0].boxes
                 
-                if hasattr(result, 'boxes') and result.boxes is not None:
-                    boxes = result.boxes
+                for i in range(len(boxes)):
+                    box = boxes.xyxy[i].cpu().numpy()
+                    conf = float(boxes.conf[i].cpu().numpy().item() if hasattr(boxes.conf[i].cpu().numpy(), 'item') else boxes.conf[i].cpu().numpy())
+                    cls_id = int(boxes.cls[i].cpu().numpy().item() if hasattr(boxes.cls[i].cpu().numpy(), 'item') else boxes.cls[i].cpu().numpy())
                     
-                    for i in range(len(boxes)):
-                        # Extract box information
-                        box = boxes.xyxy[i].cpu().numpy()  # [x1, y1, x2, y2]
-                        conf = float(boxes.conf[i].cpu().numpy())
-                        cls_id = int(boxes.cls[i].cpu().numpy())
-                        
-                        # Get card name from model's actual class names (not config)
-                        card_name = self.model.names.get(cls_id, f"unknown_{cls_id}") if hasattr(self.model, 'names') else self.class_names.get(cls_id, f"unknown_{cls_id}")
-                        
-                        # Calculate center point
-                        center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-                        
-                        # Create detection object
-                        detection = CardDetection(
-                            card_name=card_name,
-                            confidence=conf,
-                            bbox=box.tolist(),
-                            center=center
-                        )
-                        
-                        detections.append(detection)
+                    # Get card name from model's class mapping (model's native format)
+                    model_card_name = self.MODEL_CLASS_NAMES.get(cls_id, f"unknown_{cls_id}")
+                    
+                    # DEBUG: Print raw predictions to verify class mapping
+                    print(f"🔍 DEBUG: Class {cls_id} -> {model_card_name} (conf: {conf:.3f})")
+                    
+                    # SIMPLIFIED: Use model's native format, convert only for app compatibility
+                    app_card_name = self.convert_card_name(model_card_name)
+                    print(f"🔄 DEBUG: Converted {model_card_name} -> {app_card_name}")
+                    
+                    center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                    
+                    detection = CardDetection(
+                        card_name=app_card_name,
+                        confidence=conf,
+                        bbox=box.tolist(),
+                        center=center
+                    )
+                    detections.append(detection)
+
+            # PRODUCTION: Apply aggressive duplicate removal
+            print(f"🔍 DEBUG: {len(detections)} raw detections before filtering:")
+            for i, det in enumerate(detections):
+                print(f"  {i+1}. {det.card_name}: {det.confidence:.3f} at {det.center}")
+
+            # Remove duplicates aggressively
+            unique_detections = self._remove_duplicate_cards(detections)
+
+            # ADAPTIVE POST-FILTERING: Smart card count management
+            unique_detections = self._apply_adaptive_filtering(unique_detections)
+
+            logger.info(f"Detected {len(unique_detections)} unique cards in {inference_time:.3f}s")
+            return unique_detections, inference_time
             
-            logger.info(f"Raw detection: {len(detections)} cards in {inference_time:.3f}s")
-            
-            if return_raw:
-                return detections, inference_time, results
-            else:
-                return detections, inference_time
-                
         except Exception as e:
-            logger.error(f"Card detection failed: {e}")
+            logger.error(f"Detection failed: {e}")
             return [], 0.0
-    
-    def detect_cards_from_pil(self, pil_image: Image.Image) -> Tuple[List[CardDetection], float]:
-        """
-        Detect cards from PIL Image
-        
-        Args:
-            pil_image: PIL Image object
-            
-        Returns:
-            Tuple of (card detections, inference time)
-        """
-        # Convert PIL to numpy array (RGB to BGR)
-        image_array = np.array(pil_image)
-        if len(image_array.shape) == 3:
-            image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
-        
-        return self.detect_cards(image_array)
-    
-    def detect_cards_poker_optimized(self, image: np.ndarray) -> Tuple[List[CardDetection], float, Dict]:
-        """
-        Poker-optimized detection with fixes for specific issues:
-        - KC → 3S confusion fix
-        - Phantom 2S removal  
-        - Enforce exactly 9 cards
-        """
-        # Get raw detections
-        raw_detections, inference_time = self.detect_cards(image)
-        
-        if not raw_detections:
-            return [], inference_time, {'processing_report': 'No cards detected'}
-        
-        # Convert to dict format for processing
-        detection_dicts = []
-        for detection in raw_detections:
-            detection_dict = {
-                'card_name': detection.card_name,
-                'confidence': detection.confidence,
-                'bbox': detection.bbox,
-                'center': list(detection.center)
-            }
-            detection_dicts.append(detection_dict)
-        
-        logger.info(f"Raw detections: {[d['card_name'] for d in detection_dicts]}")
-        
-        # Apply specific fixes
-        fixed_dicts = self._fix_poker_detections(detection_dicts)
-        
-        # Convert back to CardDetection objects
-        final_detections = []
-        for det in fixed_dicts:
-            detection = CardDetection(
-                card_name=det['card_name'],
-                confidence=det['confidence'],
-                bbox=det['bbox'],
-                center=tuple(det['center'])
-            )
-            final_detections.append(detection)
-        
-        # Create report
-        processing_report = {
-            'total_cards': len(final_detections),
-            'cards_detected': [d.card_name for d in final_detections],
-            'inference_time_ms': inference_time * 1000,
-            'fixes_applied': True
-        }
-        
-        # Log final result with layout
-        self._log_poker_layout(final_detections)
-        
-        return final_detections, inference_time, processing_report
-    
-    def _fix_poker_detections(self, detections: List[Dict]) -> List[Dict]:
-        """
-        Fix specific issues:
-        - KC → 3S confusion (KC doesn't make sense with KS present)
-        - Remove phantom 2S 
-        - Ensure exactly 9 cards
-        """
-        logger.info(f"Input detections: {[d['card_name'] for d in detections]}")
-        
-        # Step 1: Fix known misidentifications
-        fixed_detections = []
-        all_cards = [d['card_name'].upper() for d in detections]
-        
-        for det in detections:
-            card = det['card_name'].upper()
-            
-            # Fix KC → 3S confusion
-            if card == 'KC':
-                # If we already have KS, then KC is likely misread 3S
-                if 'KS' in all_cards and '3S' not in all_cards:
-                    logger.info(f"🔧 Fixing: KC → 3S (KS already present, 3S missing)")
-                    det['card_name'] = '3S'
-                    det['confidence'] *= 0.9  # Slightly reduce confidence after correction
-            
-            # Remove phantom 2S (doesn't exist in your image)
-            elif card == '2S':
-                # Remove if low confidence or if we have enough cards
-                if det['confidence'] < 0.3 or len(detections) > 9:
-                    logger.info(f"🗑️ Removing phantom card: 2S (conf: {det['confidence']:.3f})")
-                    continue
-            
-            fixed_detections.append(det)
-        
-        # Step 2: Remove duplicates (keep highest confidence)
-        unique_cards = {}
-        for det in fixed_detections:
-            card = det['card_name'].upper()
-            if card not in unique_cards or det['confidence'] > unique_cards[card]['confidence']:
-                unique_cards[card] = det
-        
-        fixed_detections = list(unique_cards.values())
-        
-        # Step 3: Ensure exactly 9 cards (5 community + 4 player cards)
-        if len(fixed_detections) > 9:
-            logger.info(f"Too many cards ({len(fixed_detections)}), keeping top 9 by confidence")
-            fixed_detections = sorted(fixed_detections, key=lambda x: x['confidence'], reverse=True)[:9]
-        elif len(fixed_detections) < 9:
-            logger.warning(f"Only {len(fixed_detections)} cards after cleaning (expected 9)")
-        
-        # Step 4: Verify against expected cards for your image
-        expected_cards = {'10D', '5S', 'QC', 'QD', '9H', '6S', '3S', 'KS', '3D'}
-        detected_set = {d['card_name'].upper() for d in fixed_detections}
-        
-        missing = expected_cards - detected_set
-        extra = detected_set - expected_cards
-        
-        if missing:
-            logger.warning(f"⚠️ Missing expected cards: {', '.join(missing)}")
-        if extra:
-            logger.warning(f"⚠️ Extra unexpected cards: {', '.join(extra)}")
-        
-        correct = len(expected_cards & detected_set)
-        accuracy = correct / len(expected_cards)
-        logger.info(f"🎯 Accuracy: {correct}/9 = {accuracy:.1%}")
-        
-        logger.info(f"Output detections: {[d['card_name'] for d in fixed_detections]}")
-        
-        return fixed_detections
-    
-    def _log_poker_layout(self, detections: List[CardDetection]):
-        """Log detections in poker table layout format"""
-        # Group by Y position (rows)
-        cards_by_y = {}
-        for det in detections:
-            y = int(det.center[1] / 100) * 100  # Group by ~100px ranges
-            if y not in cards_by_y:
-                cards_by_y[y] = []
-            cards_by_y[y].append(det.card_name)
-        
-        logger.info("=" * 50)
-        logger.info("🃏 POKER TABLE LAYOUT:")
-        
-        for y in sorted(cards_by_y.keys()):
-            cards = sorted(cards_by_y[y])  # Sort cards in each row
-            if y == min(cards_by_y.keys()):
-                position = "Player 1 (top)"
-            elif y == max(cards_by_y.keys()):
-                position = "Player 2 (bottom)"
-            else:
-                position = "Community (center)"
-            
-            logger.info(f"  {position:18}: {', '.join(cards)}")
-        
-        logger.info(f"  {'Total Cards':18}: {len(detections)}/9")
-        logger.info("=" * 50)
     
     def detect_cards_from_pil_poker(self, pil_image: Image.Image) -> Tuple[List[CardDetection], float, Dict]:
         """
-        Poker-optimized detection from PIL Image with advanced suit preprocessing and context processing
-        
-        Args:
-            pil_image: PIL Image object
-            
-        Returns:
-            Tuple of (unique_card_detections, inference_time, processing_report)
+        Poker-specific detection method required by the service
+        Returns detection results plus processing report
         """
-        # Temporarily use original preprocessing for debugging
-        enhanced_image = preprocess_poker_image(pil_image)
+        if self.model is None:
+            logger.error("Model not loaded")
+            return [], 0.0, {}
         
-        logger.debug(f"Applied advanced suit recognition preprocessing for red suit distinction")
+        start_time = time.time()
         
-        return self.detect_cards_poker_optimized(enhanced_image)
+        # CRITICAL DEBUG: Check image preprocessing
+        print(f"📐 DEBUG: Input image size: {pil_image.size}")
+        print(f"📐 DEBUG: Input image mode: {pil_image.mode}")
+        
+        # Test different inference settings to debug the low confidence issue
+        print("🔧 DEBUG: Testing inference with training-matched settings...")
+        
+        try:
+            # Convert PIL to numpy for YOLO
+            img_np = np.array(pil_image)
+            
+            # EMERGENCY DEBUG: Use EXACT same settings as validation script
+            print(f"🔧 DEBUG: Image shape before inference: {img_np.shape}")
+            print(f"🔧 DEBUG: Image dtype: {img_np.dtype}")
+            print(f"🔧 DEBUG: Image min/max values: {img_np.min()}/{img_np.max()}")
+            
+            # PRODUCTION: Use optimized confidence threshold (0.25 = balanced)
+            conf_threshold = self.config.get('model', {}).get('confidence_threshold', 0.25)
+            iou_threshold = self.config.get('model', {}).get('iou_threshold', 0.30)
+            imgsz = self.config.get('model', {}).get('input_size', 1280)
+
+            results = self.model(
+                img_np,
+                conf=conf_threshold,   # Balanced threshold (0.25)
+                iou=iou_threshold,     # Better NMS (0.30)
+                imgsz=imgsz,           # High resolution for card details (1280)
+                verbose=False
+            )
+            
+            print(f"🔧 DEBUG: Results type: {type(results)}")
+            print(f"🔧 DEBUG: Results length: {len(results) if results else 0}")
+            if results:
+                print(f"🔧 DEBUG: First result type: {type(results[0])}")
+                print(f"🔧 DEBUG: First result boxes: {results[0].boxes}")
+                print(f"🔧 DEBUG: First result boxes type: {type(results[0].boxes)}")
+            
+            print(f"🎯 DEBUG: Raw detections count: {len(results[0].boxes) if results and results[0].boxes else 0}")
+            
+            if results and results[0].boxes is not None:
+                # Show all raw confidences
+                raw_confs = [float(conf) for conf in results[0].boxes.conf.cpu().numpy()]
+                if raw_confs:
+                    print(f"📊 DEBUG: Raw confidence range: {min(raw_confs):.3f} - {max(raw_confs):.3f}")
+                    print(f"📊 DEBUG: Raw confidences: {raw_confs[:10]}...")  # First 10
+                else:
+                    print("📊 DEBUG: No confidence scores found")
+            
+            inference_time = time.time() - start_time
+            
+            # Process results with correct class mapping
+            detections = []
+            if results and len(results) > 0 and results[0].boxes is not None:
+                boxes = results[0].boxes
+                
+                for i in range(len(boxes)):
+                    box = boxes.xyxy[i].cpu().numpy()
+                    conf = float(boxes.conf[i].cpu().numpy())
+                    cls_id = int(boxes.cls[i].cpu().numpy())
+                    
+                    # Get card name from model's class mapping (model's native format)
+                    model_card_name = self.MODEL_CLASS_NAMES.get(cls_id, f"unknown_{cls_id}")
+                    
+                    # DEBUG: Print raw predictions to verify class mapping
+                    print(f"🔍 DEBUG: Class {cls_id} -> {model_card_name} (conf: {conf:.3f})")
+                    
+                    # SIMPLIFIED: Use model's native format, convert only for app compatibility
+                    app_card_name = self.convert_card_name(model_card_name)
+                    print(f"🔄 DEBUG: Converted {model_card_name} -> {app_card_name}")
+                    
+                    center = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                    
+                    detection = CardDetection(
+                        card_name=app_card_name,
+                        confidence=conf,
+                        bbox=box.tolist(),
+                        center=center
+                    )
+                    detections.append(detection)
+
+            # PRODUCTION: Apply aggressive duplicate removal
+            print(f"🔍 DEBUG: {len(detections)} raw detections before filtering:")
+            for i, det in enumerate(detections):
+                print(f"  {i+1}. {det.card_name}: {det.confidence:.3f} at {det.center}")
+
+            # Remove duplicates aggressively
+            unique_detections = self._remove_duplicate_cards(detections)
+
+            # ADAPTIVE POST-FILTERING: Smart card count management
+            unique_detections = self._apply_adaptive_filtering(unique_detections)
+
+            print(f"✅ After filtering: {len(unique_detections)} unique cards")
+
+            # Create detailed processing report
+            processing_report = {
+                "total_detections": len(unique_detections),
+                "unique_cards": len(set(d.card_name for d in unique_detections)),
+                "inference_time": inference_time,
+                "device": str(self.device),
+                "confidence_threshold": conf_threshold,  # Actual threshold used (0.25)
+                "iou_threshold": iou_threshold,          # Actual IOU used (0.30)
+                "input_size": imgsz,                     # Actual size used (1280)
+                "detected_cards": [d.card_name for d in unique_detections],
+                "image_size": pil_image.size,
+                "raw_detection_count": len(detections) if detections else 0
+            }
+            
+            logger.info(f"Poker detection complete: {len(unique_detections)} unique cards in {inference_time:.3f}s")
+            
+            return unique_detections, inference_time, processing_report
+            
+        except Exception as e:
+            logger.error(f"Detection failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return [], 0.0, {"error": str(e)}
     
-    def analyze_poker_game_complete(self, image: np.ndarray) -> Tuple[List[CardDetection], float, Dict, Dict]:
+    def analyze_poker_game_from_pil(self, pil_image: Image.Image) -> Dict:
         """
-        Complete poker game analysis with winner determination
-        
-        Args:
-            image: Input image as numpy array (BGR format)
-            
-        Returns:
-            Tuple of (card_detections, inference_time, detection_report, game_analysis)
+        Complete poker game analysis from PIL image
+        Required by the service for game analysis
         """
-        # First get the card detections
-        detections, inference_time, detection_report = self.detect_cards_poker_optimized(image)
+        # Get card detections
+        detections, inference_time, report = self.detect_cards_from_pil_poker(pil_image)
         
-        # Convert detections to format needed for game analysis
+        if not detections:
+            return {
+                "status": "no_cards_detected",
+                "message": "No cards detected in image",
+                "inference_time": inference_time,
+                "report": report
+            }
+        
+        # Convert detections to dict format for analyzer
         detection_dicts = []
         for det in detections:
-            detection_dict = {
+            detection_dicts.append({
                 'card_name': det.card_name,
                 'confidence': det.confidence,
                 'bbox': det.bbox,
                 'center': det.center
-            }
-            detection_dicts.append(detection_dict)
+            })
         
-        # Analyze the poker game
-        game_analysis = analyze_poker_game(detection_dicts, image.shape[:2])
+        # Get image dimensions for spatial analysis
+        img_array = np.array(pil_image)
+        image_shape = (img_array.shape[0], img_array.shape[1])  # (height, width)
         
-        # Add game analysis to the detection report
-        detection_report['game_analysis'] = game_analysis
-        
-        return detections, inference_time, detection_report, game_analysis
-    
-    def analyze_poker_game_from_pil(self, pil_image: Image.Image) -> Tuple[List[CardDetection], float, Dict, Dict]:
-        """
-        Complete poker game analysis from PIL Image
-        
-        Args:
-            pil_image: PIL Image object
+        try:
+            # Try to use the poker game analyzer if available
+            from ml.poker_game_analyzer import analyze_poker_game
             
-        Returns:
-            Tuple of (card_detections, inference_time, detection_report, game_analysis)
+            # This returns a dictionary, not a GameState object
+            game_analysis = analyze_poker_game(detection_dicts, image_shape)
+            
+            # Add detection metadata
+            game_analysis['detection_report'] = report
+            game_analysis['inference_time'] = inference_time
+            game_analysis['total_cards_detected'] = len(detections)
+            
+            return game_analysis
+            
+        except ImportError:
+            # Fallback: Basic spatial grouping if analyzer not available
+            logger.warning("PokerGameAnalyzer not available, using fallback analysis")
+            
+            height = image_shape[0]
+            
+            # Group cards by position
+            player1_cards = []
+            community_cards = []
+            player2_cards = []
+            
+            for det in detection_dicts:
+                y = det['center'][1]
+                if y < height * 0.33:
+                    player1_cards.append(det['card_name'])
+                elif y < height * 0.66:
+                    community_cards.append(det['card_name'])
+                else:
+                    player2_cards.append(det['card_name'])
+            
+            return {
+                "status": "success",
+                "player1": {
+                    "cards": player1_cards,
+                    "position": "top",
+                    "count": len(player1_cards)
+                },
+                "community": {
+                    "cards": community_cards,
+                    "position": "center",
+                    "count": len(community_cards)
+                },
+                "player2": {
+                    "cards": player2_cards,
+                    "position": "bottom",
+                    "count": len(player2_cards)
+                },
+                "total_cards": len(detections),
+                "detection_report": report,
+                "inference_time": inference_time
+            }
+    
+    def _apply_adaptive_filtering(self, detections: List[CardDetection]) -> List[CardDetection]:
         """
-        # Temporarily use original preprocessing for stability
-        enhanced_image = preprocess_poker_image(pil_image)
-        
-        return self.analyze_poker_game_complete(enhanced_image)
+        ADAPTIVE filtering based on poker game rules
+
+        Strategy:
+        1. If 7-12 cards: likely correct, just cap at 12
+        2. If 13-20 cards: too many, keep top 9 by confidence
+        3. If 20+ cards: way too many, aggressive filtering
+        4. If 0-6 cards: possibly missing cards, keep all
+        """
+        count = len(detections)
+
+        if count == 0:
+            logger.warning("⚠️ No cards detected!")
+            return detections
+
+        if count <= 6:
+            logger.warning(f"⚠️ Only {count} cards detected (expected 7-9 for valid game)")
+            return detections
+
+        if 7 <= count <= 12:
+            # Good range - poker game should have 7-9 cards (or 4 for preflop)
+            logger.info(f"✅ Detected {count} cards - in expected range")
+            return detections
+
+        if 13 <= count <= 20:
+            # Too many but manageable - keep top 9 by confidence
+            logger.warning(f"⚠️ Detected {count} cards (expected 7-12). Keeping top 9 by confidence.")
+            sorted_dets = sorted(detections, key=lambda x: x.confidence, reverse=True)
+            return sorted_dets[:9]
+
+        if count > 20:
+            # Way too many - aggressive filtering
+            logger.error(f"❌ Detected {count} cards (way too many!). Applying aggressive filtering.")
+            sorted_dets = sorted(detections, key=lambda x: x.confidence, reverse=True)
+
+            # Keep only top 9 with confidence > 0.40
+            filtered = [d for d in sorted_dets if d.confidence > 0.40][:9]
+            logger.info(f"   After aggressive filtering: {len(filtered)} cards")
+            return filtered
+
+        return detections
+
+    def _remove_duplicate_cards(self, detections: List[CardDetection]) -> List[CardDetection]:
+        """
+        AGGRESSIVE duplicate removal for poker cards
+
+        Rules:
+        1. Each card can only appear once (poker deck has unique cards)
+        2. Spatial duplicates (same location) get merged
+        3. Keep highest confidence detection for each card
+        """
+        if not detections:
+            return detections
+
+        logger.info(f"🔧 Starting duplicate removal on {len(detections)} detections")
+
+        # Sort by confidence (highest first) to keep best detections
+        sorted_detections = sorted(detections, key=lambda x: x.confidence, reverse=True)
+
+        filtered = []
+        seen_card_names = set()  # Track card names we've already kept
+
+        for det in sorted_detections:
+            is_duplicate = False
+
+            # Check 1: Card name uniqueness (CRITICAL - poker has unique cards)
+            if det.card_name in seen_card_names:
+                logger.warning(f"❌ Duplicate card name: {det.card_name} (conf: {det.confidence:.3f}) - REMOVED")
+                is_duplicate = True
+            else:
+                # Check 2: Spatial duplicates (same physical card detected multiple times)
+                for existing in filtered:
+                    # Calculate distance between centers
+                    dist = np.sqrt((det.center[0] - existing.center[0])**2 +
+                                  (det.center[1] - existing.center[1])**2)
+
+                    # AGGRESSIVE: If within 80 pixels, consider it the same physical card
+                    if dist < 80:
+                        logger.warning(f"❌ Spatial duplicate: {det.card_name} too close ({dist:.0f}px) to {existing.card_name} - REMOVED")
+                        is_duplicate = True
+                        break
+
+            if not is_duplicate:
+                filtered.append(det)
+                seen_card_names.add(det.card_name)
+                logger.info(f"✅ Kept: {det.card_name} (conf: {det.confidence:.3f})")
+
+        removed_count = len(detections) - len(filtered)
+        if removed_count > 0:
+            logger.info(f"🗑️ Removed {removed_count} duplicates (kept {len(filtered)} unique cards)")
+
+        return filtered
     
     def get_performance_stats(self) -> Dict:
         """Get performance statistics"""
         if not self.inference_times:
-            return {'avg_inference_time': 0.0, 'total_inferences': 0}
+            return {"message": "No inference times recorded"}
         
         return {
-            'avg_inference_time': np.mean(self.inference_times),
-            'min_inference_time': np.min(self.inference_times),
-            'max_inference_time': np.max(self.inference_times),
-            'total_inferences': len(self.inference_times),
-            'target_time_ms': self.config.get('performance', {}).get('target_inference_time', 100)
+            "average_inference_time": np.mean(self.inference_times),
+            "min_inference_time": np.min(self.inference_times),
+            "max_inference_time": np.max(self.inference_times),
+            "total_inferences": len(self.inference_times),
+            "device": self.device
         }
-    
-    def clear_performance_stats(self):
-        """Clear performance statistics"""
-        self.inference_times = []
-    
-    def is_model_loaded(self) -> bool:
-        """Check if model is loaded"""
-        return self.model is not None
-    
-    def get_model_info(self) -> Dict:
-        """Get model information"""
-        info = {
-            'model_loaded': self.is_model_loaded(),
-            'device': self.device,
-            'config_path': self.config_path,
-            'class_count': len(self.class_names),
-        }
-        
-        if self.model is not None:
-            try:
-                info['model_type'] = str(type(self.model))
-                if hasattr(self.model, 'info'):
-                    info.update(self.model.info())
-            except Exception as e:
-                logger.warning(f"Could not get model info: {e}")
-        
-        return info
 
 
-def create_card_detector(config_path: Optional[str] = None, model_path: Optional[str] = None) -> YOLOv8CardDetector:
-    """
-    Factory function to create and initialize a card detector
-    
-    Args:
-        config_path: Path to configuration file
-        model_path: Path to trained model file
-        
-    Returns:
-        Initialized YOLOv8CardDetector instance
-    """
-    detector = YOLOv8CardDetector(config_path)
-    
-    if not detector.load_model(model_path):
-        logger.error("Failed to load model in card detector")
-        raise RuntimeError("Could not initialize card detector")
-    
-    return detector
+def create_card_detector() -> YOLOv8CardDetector:
+    """Factory function to create fixed card detector"""
+    return YOLOv8CardDetector()

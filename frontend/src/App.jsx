@@ -17,12 +17,17 @@ const LoadingSpinner = () => (
 function App() {
   const [currentView, setCurrentView] = useState('landing'); // 'landing' or 'results'
   const [gameResults, setGameResults] = useState(null);
+  const [originalImageURL, setOriginalImageURL] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState(null);
 
   const handleImageUpload = async (file) => {
     setIsProcessing(true);
     setError(null);
+
+    // Create a URL for the uploaded image to display in modal
+    const imageURL = URL.createObjectURL(file);
+    setOriginalImageURL(imageURL);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -58,12 +63,14 @@ function App() {
   const handleBackToUpload = () => {
     setCurrentView('landing');
     setGameResults(null);
+    setOriginalImageURL(null);
     setError(null);
   };
 
   const handleAnalyzeAnother = () => {
     setCurrentView('landing');
     setGameResults(null);
+    setOriginalImageURL(null);
     setError(null);
   };
 
@@ -107,6 +114,7 @@ function App() {
         {currentView === 'results' && gameResults && (
           <PokerResultsPage
             gameData={gameResults}
+            originalImage={originalImageURL}
             onBack={handleBackToUpload}
             onAnalyzeAnother={handleAnalyzeAnother}
           />

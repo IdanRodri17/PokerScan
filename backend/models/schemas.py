@@ -100,3 +100,16 @@ class ErrorResponse(BaseModel):
     error: str
     detail: str
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+class EvaluateWinnerRequest(BaseModel):
+    """Request schema for manual winner evaluation"""
+    player1_cards: List[str] = Field(..., description="Player 1 hole cards (2 cards)")
+    community_cards: List[str] = Field(..., description="Community cards (3-5 cards)")
+    player2_cards: List[str] = Field(..., description="Player 2 hole cards (2 cards)")
+
+class EvaluateWinnerResponse(BaseModel):
+    """Response schema for winner evaluation"""
+    success: bool
+    message: str
+    game_analysis: GameAnalysis
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())

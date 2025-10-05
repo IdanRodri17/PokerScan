@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Share2, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import { ArrowLeft, Share2, RotateCcw, Volume2, VolumeX, Edit3 } from 'lucide-react';
 import WinnerAnnouncement from './WinnerAnnouncement';
 import PokerTableView from './PokerTableView';
 import HandComparisonPanel from './HandComparisonPanel';
+import CardCorrectionModal from './CardCorrectionModal';
 
 const PokerResultsPage = ({ 
   gameData, 
@@ -14,6 +15,8 @@ const PokerResultsPage = ({
   const [currentSection, setCurrentSection] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showWinner, setShowWinner] = useState(false);
+  const [showCorrectionModal, setShowCorrectionModal] = useState(false);
+  const [correctedGameData, setCorrectedGameData] = useState(gameData);
 
   // Sections timing
   useEffect(() => {
@@ -42,12 +45,131 @@ const PokerResultsPage = ({
     }
   }, [showWinner, soundEnabled]);
 
+  // Handle manual corrections and re-evaluate winner
+  const handleSaveCorrections = async (correctedCards) => {
+    console.log('🔧 User corrections received:', correctedCards);
+
+    // Group cards by position
+    const player1Cards = correctedCards.filter(card => card.group === 'player1').map(c => c.card_name);
+    const communityCards = correctedCards.filter(card => card.group === 'community').map(c => c.card_name);
+    const player2Cards = correctedCards.filter(card => card.group === 'player2').map(c => c.card_name);
+
+    console.log('📊 Grouped cards:', {
+      player1: player1Cards,
+      community: communityCards,
+      player2: player2Cards
+    });
+
+    // Validate poker rules
+    if (player1Cards.length !== 2 || player2Cards.length !== 2) {
+      alert(`⚠️ Each player must have exactly 2 cards.\nPlayer 1: ${player1Cards.length} cards\nPlayer 2: ${player2Cards.length} cards`);
+      return;
+    }
+
+    if (communityCards.length < 3 || communityCards.length > 5) {
+      alert(`⚠️ Community cards must be 3, 4, or 5 cards (not ${communityCards.length})`);
+      return;
+    }
+
+    try {
+      // Call backend API to re-evaluate winner with corrected cards
+      console.log('🔄 Re-evaluating winner with backend...');
+
+      const response = await fetch('http://localhost:8000/evaluate-winner', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          player1_cards: player1Cards,
+          community_cards: communityCards,
+          player2_cards: player2Cards
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Backend error: ${response.status}`);
+      }
+
+      const winnerData = await response.json();
+      console.log('✅ Winner re-evaluated:', winnerData);
+
+      // Update game data with corrected cards and new winner
+      const updatedGameData = {
+        ...gameData,
+        cards: correctedCards,
+        game_analysis: winnerData.game_analysis
+      };
+
+      console.log('🎉 Updated game data:', updatedGameData);
+      setCorrectedGameData(updatedGameData);
+      setShowCorrectionModal(false);
+
+      // Show success message
+      alert('✅ Winner re-evaluated successfully!');
+
+    } catch (error) {
+      console.error('❌ Failed to re-evaluate winner:', error);
+      alert('⚠️ Failed to re-evaluate winner. Please try again.');
+    }
+  };
+
+  // Get detected cards in the format expected by CardCorrectionModal
+  const getDetectedCardsForModal = () => {
+    // Cards can be in either gameData.cards or gameData.detection_results
+    const allCards = gameData?.detection_results || gameData?.cards || [];
+    console.log('🔍 Getting detected cards for modal. Raw cards:', allCards);
+    console.log('🔍 gameData structure:', gameData);
+    const formattedCards = allCards.map((card, index) => ({
+      id: `card-${index}`,
+      card_name: card.card || card.card_name,
+      confidence: card.confidence,
+      bbox: card.bbox,
+      center: card.center,
+      group: determineCardGroup(card)
+    }));
+    console.log('✅ Formatted cards for modal:', formattedCards);
+    return formattedCards;
+  };
+
+  const determineCardGroup = (card) => {
+    // Logic to determine which group the card belongs to based on game analysis
+    const gameAnalysis = correctedGameData?.game_analysis || gameData?.game_analysis;
+    if (!gameAnalysis) return 'community';
+
+    const cardName = card.card || card.card_name;
+
+    // Check if card belongs to Player 1 (first player in the array)
+    if (gameAnalysis.players?.[0]?.hole_cards?.includes(cardName)) {
+      return 'player1';
+    }
+
+    // Check if card belongs to Player 2 (second player in the array)
+    if (gameAnalysis.players?.[1]?.hole_cards?.includes(cardName)) {
+      return 'player2';
+    }
+
+    // Check if card belongs to community cards
+    if (gameAnalysis.community_cards?.includes(cardName)) {
+      return 'community';
+    }
+
+    // Default based on position if not found in analysis
+    if (card.center) {
+      const yRatio = card.center[1] / 800; // Assuming image height of 800
+      if (yRatio < 0.33) return 'player1';
+      if (yRatio > 0.66) return 'player2';
+    }
+
+    return 'community';
+  };
+
   const shareResults = async () => {
     if (navigator.share) {
       try {
         await navigator.share({
           title: 'PokerVision Results',
-          text: `${gameData?.game_analysis?.winner?.name} wins with ${gameData?.game_analysis?.winner?.winning_hand}!`,
+          text: `${correctedGameData?.game_analysis?.winner?.name} wins with ${correctedGameData?.game_analysis?.winner?.winning_hand}!`,
           url: window.location.href
         });
       } catch (err) {
@@ -61,10 +183,33 @@ const PokerResultsPage = ({
     }
   };
 
-  if (!gameData || !gameData.game_analysis) {
+  // Debug log to see what we're getting
+  console.log('PokerResultsPage gameData:', gameData);
+
+  if (!gameData) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
         <div className="text-white text-xl">Loading results...</div>
+      </div>
+    );
+  }
+
+  // Check if we have game analysis - if not, show simple results
+  if (!gameData.game_analysis) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-center text-white max-w-md">
+          <h1 className="text-2xl mb-4">Detection Complete</h1>
+          <p className="mb-4">
+            Cards: {gameData.cards_detected ? gameData.cards_detected.join(', ') : 'None detected'}
+          </p>
+          <button 
+            onClick={onBack}
+            className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded text-white"
+          >
+            Back to Upload
+          </button>
+        </div>
       </div>
     );
   }
@@ -116,7 +261,7 @@ const PokerResultsPage = ({
               Back to Upload
             </button>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <button
                 onClick={() => setSoundEnabled(!soundEnabled)}
                 className="flex items-center justify-center gap-2 p-3 bg-gray-800/50 hover:bg-gray-700/50 
@@ -124,6 +269,15 @@ const PokerResultsPage = ({
               >
                 {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
                 <span className="text-xs">Sound</span>
+              </button>
+
+              <button
+                onClick={() => setShowCorrectionModal(true)}
+                className="flex items-center justify-center gap-2 p-3 bg-orange-600/80 hover:bg-orange-500/80 
+                           text-white rounded-lg transition-colors backdrop-blur-sm text-sm"
+              >
+                <Edit3 size={18} />
+                <span className="text-xs">Fix</span>
               </button>
 
               <button
@@ -167,6 +321,15 @@ const PokerResultsPage = ({
               </button>
 
               <button
+                onClick={() => setShowCorrectionModal(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-600/80 hover:bg-orange-500/80 
+                           text-white rounded-lg transition-colors backdrop-blur-sm"
+              >
+                <Edit3 size={20} />
+                Fix Detection
+              </button>
+
+              <button
                 onClick={shareResults}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600/80 hover:bg-blue-500/80 
                            text-white rounded-lg transition-colors backdrop-blur-sm"
@@ -203,7 +366,7 @@ const PokerResultsPage = ({
             className="min-h-[50vh] flex items-center justify-center"
           >
             <WinnerAnnouncement 
-              winner={gameData.game_analysis.winner}
+              winner={correctedGameData.game_analysis.winner}
               isVisible={showWinner}
             />
           </motion.section>
@@ -226,13 +389,13 @@ const PokerResultsPage = ({
                 <p className="text-gray-300 text-lg max-w-2xl mx-auto">
                   See how the cards were distributed and why 
                   <span className="text-yellow-400 font-semibold ml-1">
-                    {gameData.game_analysis.winner?.name}
+                    {correctedGameData.game_analysis.winner?.name}
                   </span> won
                 </p>
               </motion.div>
 
               <PokerTableView 
-                gameAnalysis={gameData.game_analysis}
+                gameAnalysis={correctedGameData.game_analysis}
                 showAnimation={currentSection >= 1}
               />
             </motion.section>
@@ -259,7 +422,7 @@ const PokerResultsPage = ({
               </motion.div>
 
               <HandComparisonPanel 
-                gameAnalysis={gameData.game_analysis}
+                gameAnalysis={correctedGameData.game_analysis}
                 showAnimation={currentSection >= 2}
               />
             </motion.section>
@@ -454,6 +617,15 @@ const PokerResultsPage = ({
 
         </div>
       </motion.div>
+
+      {/* Card Correction Modal */}
+      <CardCorrectionModal
+        isOpen={showCorrectionModal}
+        originalImage={originalImage}
+        detectedCards={getDetectedCardsForModal()}
+        onSave={handleSaveCorrections}
+        onCancel={() => setShowCorrectionModal(false)}
+      />
     </div>
   );
 };

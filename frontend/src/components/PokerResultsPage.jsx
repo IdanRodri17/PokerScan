@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Share2, RotateCcw, Volume2, VolumeX, Edit3 } from 'lucide-react';
+import { ArrowLeft, Share2, RotateCcw, Edit3 } from 'lucide-react';
 import WinnerAnnouncement from './WinnerAnnouncement';
 import PokerTableView from './PokerTableView';
 import HandComparisonPanel from './HandComparisonPanel';
@@ -13,7 +13,6 @@ const PokerResultsPage = ({
   originalImage 
 }) => {
   const [currentSection, setCurrentSection] = useState(0);
-  const [soundEnabled, setSoundEnabled] = useState(true);
   const [showWinner, setShowWinner] = useState(false);
   const [showCorrectionModal, setShowCorrectionModal] = useState(false);
   const [correctedGameData, setCorrectedGameData] = useState(gameData);
@@ -35,15 +34,6 @@ const PokerResultsPage = ({
 
     return () => timeouts.forEach(clearTimeout);
   }, []);
-
-  // Play sound effect for winner
-  useEffect(() => {
-    if (showWinner && soundEnabled) {
-      // You can add actual sound file here
-      // const audio = new Audio('/sounds/fanfare.mp3');
-      // audio.play().catch(() => {}); // Ignore if audio fails
-    }
-  }, [showWinner, soundEnabled]);
 
   // Handle manual corrections and re-evaluate winner
   const handleSaveCorrections = async (correctedCards) => {
@@ -261,16 +251,7 @@ const PokerResultsPage = ({
               Back to Upload
             </button>
 
-            <div className="grid grid-cols-4 gap-2">
-              <button
-                onClick={() => setSoundEnabled(!soundEnabled)}
-                className="flex items-center justify-center gap-2 p-3 bg-gray-800/50 hover:bg-gray-700/50 
-                           text-white rounded-lg transition-colors backdrop-blur-sm border border-gray-600/30"
-              >
-                {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
-                <span className="text-xs">Sound</span>
-              </button>
-
+            <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={() => setShowCorrectionModal(true)}
                 className="flex items-center justify-center gap-2 p-3 bg-orange-600/80 hover:bg-orange-500/80 
@@ -313,14 +294,6 @@ const PokerResultsPage = ({
 
             <div className="flex items-center gap-3">
               <button
-                onClick={() => setSoundEnabled(!soundEnabled)}
-                className="p-2 bg-gray-800/50 hover:bg-gray-700/50 text-white rounded-lg 
-                           transition-colors backdrop-blur-sm border border-gray-600/30"
-              >
-                {soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
-              </button>
-
-              <button
                 onClick={() => setShowCorrectionModal(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-orange-600/80 hover:bg-orange-500/80 
                            text-white rounded-lg transition-colors backdrop-blur-sm"
@@ -360,15 +333,85 @@ const PokerResultsPage = ({
       >
         <div className="max-w-6xl mx-auto space-y-8 md:space-y-12">
           
-          {/* Section 1: Winner Spotlight */}
+          {/* Section 1: Winner Spotlight or Fix Detection Prompt */}
           <motion.section
             variants={sectionVariants}
             className="min-h-[50vh] flex items-center justify-center"
           >
-            <WinnerAnnouncement 
-              winner={correctedGameData.game_analysis.winner}
-              isVisible={showWinner}
-            />
+            {correctedGameData.game_analysis.winner ? (
+              <WinnerAnnouncement
+                winner={correctedGameData.game_analysis.winner}
+                isVisible={showWinner}
+              />
+            ) : (
+              /* Fallback: No winner detected - prompt user to fix detection */
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.8, type: "spring", bounce: 0.3 }}
+                className="max-w-2xl mx-auto bg-gradient-to-br from-orange-500/20 via-yellow-600/20 to-orange-500/20
+                           backdrop-blur-lg rounded-3xl p-8 md:p-12 border-2 border-orange-400/40
+                           shadow-2xl shadow-orange-400/20"
+              >
+                {/* Alert Icon */}
+                <div className="flex justify-center mb-6">
+                  <motion.div
+                    animate={{
+                      rotate: [0, -10, 10, -10, 0],
+                      scale: [1, 1.1, 1]
+                    }}
+                    transition={{
+                      duration: 2,
+                      repeat: Infinity,
+                      ease: "easeInOut"
+                    }}
+                    className="w-20 h-20 md:w-24 md:h-24 bg-orange-500/30 rounded-full flex items-center justify-center border-2 border-orange-400/50"
+                  >
+                    <Edit3 size={40} className="text-orange-300" />
+                  </motion.div>
+                </div>
+
+                {/* Title */}
+                <h2 className="text-3xl md:text-4xl font-bold text-center mb-4 bg-gradient-to-r from-orange-300 via-yellow-300 to-orange-300 bg-clip-text text-transparent">
+                  Incomplete Detection
+                </h2>
+
+                {/* Description */}
+                <p className="text-white/90 text-center text-base md:text-lg mb-6 leading-relaxed">
+                  I couldn't detect all 9 cards needed to determine a winner.
+                  Don't worry - you can easily add the missing cards manually!
+                </p>
+
+                {/* Cards Count Info */}
+                <div className="bg-black/30 backdrop-blur-sm rounded-xl p-4 mb-6 border border-orange-400/20">
+                  <div className="flex items-center justify-center gap-3 text-white/80">
+                    <span className="text-2xl font-bold text-orange-300">
+                      {correctedGameData?.detection_results?.length || correctedGameData?.cards?.length || 0}
+                    </span>
+                    <span className="text-lg">/</span>
+                    <span className="text-lg text-white/60">9 cards detected</span>
+                  </div>
+                </div>
+
+                {/* Fix Detection Button */}
+                <motion.button
+                  onClick={() => setShowCorrectionModal(true)}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-orange-500 to-yellow-500
+                             hover:from-orange-600 hover:to-yellow-600 text-white font-bold text-lg rounded-xl
+                             transition-all shadow-lg shadow-orange-500/30 border border-orange-400/50"
+                >
+                  <Edit3 size={24} />
+                  Fix Detection & See Winner
+                </motion.button>
+
+                {/* Help Text */}
+                <p className="text-white/60 text-center text-sm mt-4">
+                  Click to add missing cards and determine the winner
+                </p>
+              </motion.div>
+            )}
           </motion.section>
 
           {/* Section 2: Poker Table View */}

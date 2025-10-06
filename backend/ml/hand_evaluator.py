@@ -118,11 +118,13 @@ class PokerHand:
     
     def _evaluate_hand(self) -> None:
         """Evaluate the poker hand and determine its ranking"""
-        # Get the best 5 cards for evaluation
-        best_5_cards = self.cards[:5]
-        
-        ranks = [card.rank_value for card in best_5_cards]
-        suits = [card.suit for card in best_5_cards]
+        # Use exactly 5 cards for evaluation
+        # If more than 5 cards provided, this should not happen as evaluate_best_hand
+        # handles finding best combinations
+        cards_to_evaluate = self.cards[:5] if len(self.cards) >= 5 else self.cards
+
+        ranks = [card.rank_value for card in cards_to_evaluate]
+        suits = [card.suit for card in cards_to_evaluate]
         
         rank_counts = Counter(ranks)
         suit_counts = Counter(suits)
@@ -199,39 +201,41 @@ class PokerHand:
     
     def _calculate_hand_strength(self) -> int:
         """Calculate numeric hand strength for comparison"""
-        # Base strength from hand rank
-        strength = self.hand_rank.rank_value * 1000000
-        
-        # Add details for tie-breaking
+        # Base strength from hand rank (using much larger multiplier to ensure rank dominates)
+        strength = self.hand_rank.rank_value * 100000000  # 100 million per rank level
+
+        # Add details for tie-breaking (all tie-breakers are much smaller than rank difference)
         if self.hand_rank == HandRank.ROYAL_FLUSH:
             strength += 0  # All royal flushes are equal
         elif self.hand_rank == HandRank.STRAIGHT_FLUSH:
-            strength += self.rank_details["high_card"] * 1000
+            strength += self.rank_details["high_card"] * 10000
         elif self.hand_rank == HandRank.FOUR_OF_A_KIND:
-            strength += self.rank_details["four_kind"] * 1000 + self.rank_details["kicker"]
+            strength += self.rank_details["four_kind"] * 10000 + self.rank_details["kicker"]
         elif self.hand_rank == HandRank.FULL_HOUSE:
-            strength += self.rank_details["trips"] * 1000 + self.rank_details["pair"]
+            strength += self.rank_details["trips"] * 10000 + self.rank_details["pair"] * 100
         elif self.hand_rank == HandRank.FLUSH:
             for i, card_rank in enumerate(self.rank_details["high_cards"]):
                 strength += card_rank * (100 ** (4 - i))
         elif self.hand_rank == HandRank.STRAIGHT:
-            strength += self.rank_details["high_card"] * 1000
+            strength += self.rank_details["high_card"] * 10000
         elif self.hand_rank == HandRank.THREE_OF_A_KIND:
-            strength += self.rank_details["trips"] * 10000
+            strength += self.rank_details["trips"] * 100000
             for i, kicker in enumerate(self.rank_details["kickers"]):
                 strength += kicker * (100 ** (1 - i))
         elif self.hand_rank == HandRank.TWO_PAIR:
-            strength += (self.rank_details["high_pair"] * 10000 + 
-                        self.rank_details["low_pair"] * 100 + 
+            strength += (self.rank_details["high_pair"] * 100000 +
+                        self.rank_details["low_pair"] * 1000 +
                         self.rank_details["kicker"])
         elif self.hand_rank == HandRank.ONE_PAIR:
-            strength += self.rank_details["pair"] * 10000
+            strength += self.rank_details["pair"] * 100000
             for i, kicker in enumerate(self.rank_details["kickers"]):
                 strength += kicker * (100 ** (2 - i))
         else:  # High card
+            # Use smaller multipliers so high card values don't exceed rank differences
+            multipliers = [10000, 1000, 100, 10, 1]
             for i, card_rank in enumerate(self.rank_details["high_cards"]):
-                strength += card_rank * (100 ** (4 - i))
-        
+                strength += card_rank * multipliers[i]
+
         return strength
     
     def __str__(self) -> str:
@@ -295,33 +299,44 @@ class PokerHandEvaluator:
         
         # If more than 5 cards, find the best combination
         from itertools import combinations
-        
+
         best_hand = None
         best_strength = -1
-        
+
+        logger.info(f"🔍 Evaluating all combinations from {len(cards)} cards: {[str(c) for c in cards]}")
+
         # Try all possible 5-card combinations
+        combo_count = 0
         for card_combo in combinations(cards, 5):
             hand = PokerHand(list(card_combo))
+            combo_count += 1
+            logger.debug(f"   Combo {combo_count}: {[str(c) for c in card_combo]} = {hand.hand_rank.display_name} (strength: {hand.hand_strength})")
             if hand.hand_strength > best_strength:
                 best_hand = hand
                 best_strength = hand.hand_strength
-        
+                logger.info(f"   ⭐ New best hand: {hand.hand_rank.display_name} (strength: {hand.hand_strength})")
+
         return best_hand
     
-    def evaluate_community_and_hole_cards(self, community_cards: List[str], 
+    def evaluate_community_and_hole_cards(self, community_cards: List[str],
                                         hole_cards: List[str]) -> Dict:
         """
         Evaluate poker hand with community and hole cards (Texas Hold'em style)
-        
+
         Args:
             community_cards: List of community card names
             hole_cards: List of hole card names (typically 2)
-            
+
         Returns:
             Dictionary with evaluation results
         """
         all_cards = community_cards + hole_cards
+        logger.info(f"🃏 Evaluating hand: Community {community_cards} + Hole {hole_cards} = {all_cards}")
         best_hand = self.evaluate_best_hand(all_cards)
+
+        if best_hand:
+            logger.info(f"✅ Best hand: {best_hand.hand_rank.display_name} (strength: {best_hand.hand_strength})")
+            logger.info(f"   Cards used: {[str(c) for c in best_hand.cards[:5]]}")
         
         if not best_hand:
             return {

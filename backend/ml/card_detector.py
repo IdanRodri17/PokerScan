@@ -412,22 +412,25 @@ class YOLOv8CardDetector:
             traceback.print_exc()
             return [], 0.0, {"error": str(e)}
     
-    def analyze_poker_game_from_pil(self, pil_image: Image.Image) -> Dict:
+    def analyze_poker_game_from_pil(self, pil_image: Image.Image) -> Tuple[Dict, List]:
         """
         Complete poker game analysis from PIL image
         Required by the service for game analysis
+
+        Returns:
+            Tuple of (game_analysis dict, list of CardDetection objects)
         """
         # Get card detections
         detections, inference_time, report = self.detect_cards_from_pil_poker(pil_image)
-        
+
         if not detections:
             return {
                 "status": "no_cards_detected",
                 "message": "No cards detected in image",
                 "inference_time": inference_time,
                 "report": report
-            }
-        
+            }, []
+
         # Convert detections to dict format for analyzer
         detection_dicts = []
         for det in detections:
@@ -437,24 +440,24 @@ class YOLOv8CardDetector:
                 'bbox': det.bbox,
                 'center': det.center
             })
-        
+
         # Get image dimensions for spatial analysis
         img_array = np.array(pil_image)
         image_shape = (img_array.shape[0], img_array.shape[1])  # (height, width)
-        
+
         try:
             # Try to use the poker game analyzer if available
             from ml.poker_game_analyzer import analyze_poker_game
-            
+
             # This returns a dictionary, not a GameState object
             game_analysis = analyze_poker_game(detection_dicts, image_shape)
-            
+
             # Add detection metadata
             game_analysis['detection_report'] = report
             game_analysis['inference_time'] = inference_time
             game_analysis['total_cards_detected'] = len(detections)
-            
-            return game_analysis
+
+            return game_analysis, detections
             
         except ImportError:
             # Fallback: Basic spatial grouping if analyzer not available
@@ -496,7 +499,7 @@ class YOLOv8CardDetector:
                 "total_cards": len(detections),
                 "detection_report": report,
                 "inference_time": inference_time
-            }
+            }, detections
     
     def _apply_adaptive_filtering(self, detections: List[CardDetection]) -> List[CardDetection]:
         """

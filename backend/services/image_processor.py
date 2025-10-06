@@ -250,26 +250,24 @@ class ImageProcessor:
     def _ml_card_detection_with_game_analysis(self, image: Image.Image, image_shape: Tuple[int, int]) -> Tuple[List[Dict], Dict]:
         """
         Perform ML-based card detection with complete poker game analysis
-        
+
         Args:
             image: PIL Image object
             image_shape: (height, width) of the image
-            
+
         Returns:
             Tuple of (detection results, game analysis)
         """
         try:
-            # Step 1: Detect cards and analyze the poker game
-            game_analysis = self.card_detector.analyze_poker_game_from_pil(image)
-            
-            # Step 2: Get the detections from the game analysis
-            detections, inference_time, processing_report = self.card_detector.detect_cards_from_pil_poker(image)
-            
+            # OPTIMIZED: Single call to analyze_poker_game_from_pil returns both game analysis AND detections
+            # This eliminates the duplicate model inference that was causing 10+ second delays
+            game_analysis, detections = self.card_detector.analyze_poker_game_from_pil(image)
+
             if not detections:
                 logger.warning("No cards detected by ML model")
                 return [], {}
-                
-            # Step 3: Convert detection objects to dictionaries
+
+            # Convert detection objects to dictionaries
             results = []
             for detection in detections:
                 detection_dict = {
@@ -279,9 +277,10 @@ class ImageProcessor:
                     'center': list(detection.center)
                 }
                 results.append(detection_dict)
-            
+
+            inference_time = game_analysis.get('inference_time', 0.0)
             logger.info(f"ML detection complete: {len(results)} cards, inference: {inference_time:.3f}s")
-            
+
             return results, game_analysis
             
         except Exception as e:

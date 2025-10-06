@@ -247,16 +247,20 @@ async def evaluate_winner(request: EvaluateWinnerRequest):
                 detail=f"Community cards must be 3-5 cards, got {len(request.community_cards)}"
             )
 
-        logger.info(f"Evaluating winner - Player 1: {request.player1_cards}, Community: {request.community_cards}, Player 2: {request.player2_cards}")
+        logger.info(f"🎯 Evaluating winner - Player 1: {request.player1_cards}, Community: {request.community_cards}, Player 2: {request.player2_cards}")
 
         # Evaluate both players' hands
+        logger.info(f"🔵 Evaluating Player 1...")
         player1_result = hand_evaluator.evaluate_community_and_hole_cards(
             request.community_cards, request.player1_cards
         )
+        logger.info(f"   Player 1 result: {player1_result['hand_rank']} (strength: {player1_result['hand_strength']})")
 
+        logger.info(f"🔴 Evaluating Player 2...")
         player2_result = hand_evaluator.evaluate_community_and_hole_cards(
             request.community_cards, request.player2_cards
         )
+        logger.info(f"   Player 2 result: {player2_result['hand_rank']} (strength: {player2_result['hand_strength']})")
 
         # Validate both hands
         if not player1_result.get('valid') or not player2_result.get('valid'):
@@ -269,6 +273,10 @@ async def evaluate_winner(request: EvaluateWinnerRequest):
         player1_strength = player1_result['hand_strength']
         player2_strength = player2_result['hand_strength']
 
+        logger.info(f"🏆 Comparing hands:")
+        logger.info(f"   Player 1: {player1_result['hand_rank']} (strength: {player1_strength})")
+        logger.info(f"   Player 2: {player2_result['hand_rank']} (strength: {player2_strength})")
+
         is_tie = player1_strength == player2_strength
         winner_id = None
         winner_name = None
@@ -279,10 +287,14 @@ async def evaluate_winner(request: EvaluateWinnerRequest):
                 winner_id = 1
                 winner_name = "Player 1"
                 winning_hand = player1_result['hand_rank']
+                logger.info(f"✅ Winner: Player 1 with {winning_hand}")
             else:
                 winner_id = 2
                 winner_name = "Player 2"
                 winning_hand = player2_result['hand_rank']
+                logger.info(f"✅ Winner: Player 2 with {winning_hand}")
+        else:
+            logger.info(f"🤝 It's a TIE!")
 
         # Create player info objects
         players = [

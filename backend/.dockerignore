@@ -1,0 +1,62 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+
+# Git
+.git/
+.gitignore
+
+# Documentation (don't deploy)
+*.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Large ML files
+*.weights
+ml/training/
+test_results/
+visualizations/
+
+# Datasets
+*_dataset/
+raw_*/
+iphone_*/
+*.zip
+
+# Temporary files
+*.tmp
+.cache/
+
+# Keep these
+!requirements.txt
+!runtime.txt
+!main.py

@@ -341,9 +341,11 @@ const PokerResultsPage = ({
             variants={sectionVariants}
             className="min-h-[50vh] flex items-center justify-center"
           >
-            {correctedGameData.game_analysis.winner ? (
+            {correctedGameData.game_analysis.winner || correctedGameData.game_analysis.tie ? (
               <WinnerAnnouncement
                 winner={correctedGameData.game_analysis.winner}
+                isTie={correctedGameData.game_analysis.tie}
+                tiedPlayers={correctedGameData.game_analysis.tied_players || []}
                 isVisible={showWinner}
               />
             ) : (
@@ -433,10 +435,13 @@ const PokerResultsPage = ({
                   Game Analysis
                 </h2>
                 <p className="text-gray-300 text-lg max-w-2xl mx-auto">
-                  See how the cards were distributed and why 
-                  <span className="text-yellow-400 font-semibold ml-1">
-                    {correctedGameData.game_analysis.winner?.name}
-                  </span> won
+                  See how the cards were distributed{correctedGameData.game_analysis.tie ? ' and why it was a tie' : ' and why '}
+                  {!correctedGameData.game_analysis.tie && (
+                    <span className="text-yellow-400 font-semibold ml-1">
+                      {correctedGameData.game_analysis.winner?.name}
+                    </span>
+                  )}
+                  {!correctedGameData.game_analysis.tie && ' won'}
                 </p>
               </motion.div>
 

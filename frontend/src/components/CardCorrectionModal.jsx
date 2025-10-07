@@ -341,40 +341,50 @@ const CardCorrectionModal = ({
 
     console.log(`📋 ${groupName} group received ${cards.length} cards:`, cards);
 
+    const handleAddCardClick = () => {
+      // Set position based on group
+      const groupPositions = {
+        player1: { x: 400, y: 150 },
+        community: { x: 400, y: 400 },
+        player2: { x: 400, y: 650 }
+      };
+      setAddingCardPosition(groupPositions[groupName]);
+      setShowCardSelector(true);
+    };
+
     return (
       <div className="card-group">
-        <h3 className="group-title">
-          {title}
-          <span style={{ fontSize: '0.8em', marginLeft: '10px', opacity: 0.7 }}>
-            ({currentCount}/{maxCount} cards)
-          </span>
-        </h3>
+        <div className="group-header">
+          <h3 className="group-title">
+            {title}
+            <span style={{ fontSize: '0.8em', marginLeft: '10px', opacity: 0.7 }}>
+              ({currentCount}/{maxCount} cards)
+            </span>
+          </h3>
+          <button
+            className="add-card-btn-header"
+            disabled={isAtLimit}
+            onClick={handleAddCardClick}
+            title={isAtLimit ? `Maximum ${maxCount} cards allowed` : 'Add a card'}
+          >
+            {isAtLimit ? '✓ Full' : '+ Add'}
+          </button>
+        </div>
         <div className="cards-container">
           {cards.length === 0 && (
-            <div style={{ color: '#888', fontSize: '0.9em', padding: '10px' }}>
+            <div className="empty-group-message">
               No cards detected in this position
+              <button
+                className="add-card-btn-inline"
+                onClick={handleAddCardClick}
+              >
+                + Add First Card
+              </button>
             </div>
           )}
           {cards.map((card) => (
             <CardComponent key={card.id} card={card} />
           ))}
-          <button
-            className="add-card-btn"
-            disabled={isAtLimit}
-            onClick={() => {
-              // Set position based on group
-              const groupPositions = {
-                player1: { x: 400, y: 150 },
-                community: { x: 400, y: 400 },
-                player2: { x: 400, y: 650 }
-              };
-              setAddingCardPosition(groupPositions[groupName]);
-              setShowCardSelector(true);
-            }}
-            title={isAtLimit ? `Maximum ${maxCount} cards allowed` : 'Add a card'}
-          >
-            {isAtLimit ? '✓ Full' : '+ Add Card'}
-          </button>
         </div>
       </div>
     );
@@ -798,9 +808,23 @@ const CardCorrectionModal = ({
             font-size: 11px;
           }
 
-          .add-card-btn {
-            padding: 8px;
+          .add-card-btn-header {
+            padding: 6px 12px;
             font-size: 12px;
+            min-width: 70px;
+          }
+
+          .add-card-btn-inline {
+            padding: 8px 16px;
+            font-size: 13px;
+          }
+
+          .group-header {
+            gap: 8px;
+          }
+
+          .group-title {
+            font-size: 14px;
           }
 
           .modal-header {
@@ -847,11 +871,76 @@ const CardCorrectionModal = ({
           border: 2px dashed #ffd700;
         }
 
+        .group-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 15px;
+          gap: 10px;
+        }
+
         .group-title {
-          margin: 0 0 15px 0;
+          margin: 0;
           color: #ffd700;
           font-size: 16px;
           font-weight: 600;
+          flex: 1;
+        }
+
+        .add-card-btn-header {
+          background: #28a745;
+          color: white;
+          border: none;
+          border-radius: 6px;
+          padding: 8px 16px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 600;
+          white-space: nowrap;
+          transition: all 0.2s ease;
+          min-width: 80px;
+        }
+
+        .add-card-btn-header:hover:not(:disabled) {
+          background: #218838;
+          transform: translateY(-1px);
+        }
+
+        .add-card-btn-header:disabled {
+          background: #6c757d;
+          cursor: not-allowed;
+          opacity: 0.6;
+        }
+
+        .empty-group-message {
+          color: #888;
+          font-size: 0.9em;
+          padding: 20px;
+          text-align: center;
+          background: #2a2a2a;
+          border-radius: 6px;
+          border: 2px dashed #555;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          align-items: center;
+        }
+
+        .add-card-btn-inline {
+          background: #28a745;
+          color: white;
+          border: none;
+          border-radius: 6px;
+          padding: 10px 20px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 600;
+          transition: all 0.2s ease;
+        }
+
+        .add-card-btn-inline:hover {
+          background: #218838;
+          transform: translateY(-1px);
         }
 
         .cards-container {
@@ -952,20 +1041,6 @@ const CardCorrectionModal = ({
           background: #c82333;
         }
 
-        .add-card-btn {
-          background: #28a745;
-          color: white;
-          border: none;
-          border-radius: 8px;
-          padding: 10px;
-          cursor: pointer;
-          font-size: 12px;
-          transition: all 0.2s ease;
-        }
-
-        .add-card-btn:hover {
-          background: #218838;
-        }
 
         .modal-footer {
           padding: 20px;
@@ -1043,6 +1118,58 @@ const CardCorrectionModal = ({
           padding: 30px;
           width: 400px;
           max-width: 90vw;
+          max-height: 90vh;
+          overflow-y: auto;
+        }
+
+        /* Mobile-friendly card selector */
+        @media (max-width: 480px) {
+          .card-selector-content {
+            padding: 20px;
+            width: 95vw;
+            max-height: 80vh;
+          }
+
+          .card-selector-content h3 {
+            font-size: 18px;
+            margin-bottom: 15px;
+          }
+
+          .value-grid {
+            grid-template-columns: repeat(7, 1fr);
+            gap: 6px;
+          }
+
+          .suit-grid {
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+          }
+
+          .value-btn,
+          .suit-btn {
+            padding: 12px 8px;
+            font-size: 14px;
+            min-height: 44px;
+            touch-action: manipulation;
+          }
+
+          .suit-btn {
+            font-size: 24px;
+            padding: 12px;
+          }
+
+          .card-preview {
+            font-size: 28px;
+            padding: 12px;
+            margin-bottom: 15px;
+          }
+
+          .card-selector-actions button {
+            padding: 12px 20px;
+            font-size: 14px;
+            min-height: 44px;
+            touch-action: manipulation;
+          }
         }
 
         .card-selector-content h3 {

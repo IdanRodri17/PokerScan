@@ -28,11 +28,17 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+# Configure CORS - Allow Hugging Face, Netlify, and local development
+cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+if cors_origins == ["*"]:
+    # Default: allow all origins (can be restricted later with environment variable)
+    allow_origins_setting = ["*"]
+else:
+    allow_origins_setting = cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=allow_origins_setting,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

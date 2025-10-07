@@ -1,5 +1,8 @@
 import React, { useState, Suspense, lazy } from 'react';
 
+// API URL from environment variable (set in Netlify)
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 // Lazy load components for better performance
 const PokerLandingPage = lazy(() => import('./components/PokerLandingPage'));
 const PokerResultsPage = lazy(() => import('./components/PokerResultsPage'));
@@ -34,7 +37,7 @@ function App() {
 
     try {
       // Call your backend API
-      const response = await fetch('http://localhost:8000/upload?create_visualization=true', {
+      const response = await fetch(`${API_URL}/upload?create_visualization=true`, {
         method: 'POST',
         body: formData
       });

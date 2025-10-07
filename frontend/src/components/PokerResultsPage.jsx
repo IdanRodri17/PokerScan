@@ -6,6 +6,9 @@ import PokerTableView from './PokerTableView';
 import HandComparisonPanel from './HandComparisonPanel';
 import CardCorrectionModal from './CardCorrectionModal';
 
+// API URL from environment variable
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const PokerResultsPage = ({ 
   gameData, 
   onBack, 
@@ -65,7 +68,7 @@ const PokerResultsPage = ({
       // Call backend API to re-evaluate winner with corrected cards
       console.log('🔄 Re-evaluating winner with backend...');
 
-      const response = await fetch('http://localhost:8000/evaluate-winner', {
+      const response = await fetch(`${API_URL}/evaluate-winner`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

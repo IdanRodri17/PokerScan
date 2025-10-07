@@ -2,7 +2,6 @@
 
 [![Live Demo](https://img.shields.io/badge/demo-live-success)](https://pokervision.netlify.app)
 [![Backend API](https://img.shields.io/badge/API-Hugging%20Face-yellow)](https://rodri17-pokervision-backend.hf.space)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **PokerVision** is an AI-powered poker card detection system that analyzes poker game images in real-time and automatically determines the winner. Built with cutting-edge computer vision and machine learning technologies.
 
@@ -79,22 +78,6 @@
 - Compares hand strengths using numerical scoring
 - Handles ties correctly
 - Displays winning hand and cards
-
----
-
-## 📸 Screenshots
-
-### Landing Page
-![Landing Page](https://via.placeholder.com/600x400/1a1a2e/ffffff?text=Landing+Page)
-
-### Detection Results
-![Detection Results](https://via.placeholder.com/600x400/1a1a2e/ffffff?text=Detection+Results)
-
-### Manual Correction
-![Manual Correction](https://via.placeholder.com/600x400/1a1a2e/ffffff?text=Manual+Correction)
-
-### Winner Announcement
-![Winner Announcement](https://via.placeholder.com/600x400/1a1a2e/ffffff?text=Winner+Announcement)
 
 ---
 
@@ -313,12 +296,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Idan Rodriguez**
 
-- LinkedIn: [Your LinkedIn](https://www.linkedin.com/in/idanrodrigez/)
+- LinkedIn: [LinkedIn](https://www.linkedin.com/in/idanrodrigez/)
 - Email: idan101012@gmail.com
-- Portfolio: [Your Portfolio](https://idanportfolio.netlify.app/)
+- Portfolio: [Portfolio](https://idanportfolio.netlify.app/)
 
 ---
-
 ## 🎓 Project Status
 
 **Status:** ✅ Production Ready

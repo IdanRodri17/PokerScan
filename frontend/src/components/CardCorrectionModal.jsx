@@ -342,11 +342,14 @@ const CardCorrectionModal = ({
     console.log(`📋 ${groupName} group received ${cards.length} cards:`, cards);
 
     const handleAddCardClick = () => {
-      // Set position based on group
+      // Set position based on group - use ratios instead of fixed positions
+      const imageHeight = imageRef.current?.naturalHeight || 800;
+      const imageWidth = imageRef.current?.naturalWidth || 600;
+
       const groupPositions = {
-        player1: { x: 400, y: 150 },
-        community: { x: 400, y: 400 },
-        player2: { x: 400, y: 650 }
+        player1: { x: imageWidth / 2, y: imageHeight * 0.20 },   // 20% from top
+        community: { x: imageWidth / 2, y: imageHeight * 0.50 },  // 50% (center)
+        player2: { x: imageWidth / 2, y: imageHeight * 0.80 }    // 80% from top
       };
       setAddingCardPosition(groupPositions[groupName]);
       setShowCardSelector(true);

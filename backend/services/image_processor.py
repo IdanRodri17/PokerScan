@@ -35,77 +35,64 @@ class ImageProcessor:
     def _initialize_ml_components(self) -> bool:
         """Initialize ML components (card detector and spatial analyzer)"""
         import os
-        model_path = r"C:\Users\zionn\Desktop\PokerScan\backend\ml\models\poker_ultimate_best.pt"
-        
-        # Debug: Check file directly
-        print(f"🔍 Checking model file...")
-        print(f"📁 Path: {model_path}")
-        print(f"📊 Exists: {os.path.exists(model_path)}")
-        if os.path.exists(model_path):
-            print(f"📦 Size: {os.path.getsize(model_path) / 1024 / 1024:.1f} MB")
+
         try:
             # Create the card detector
             self.card_detector = create_card_detector()
-            
+
             # Try to find and load a trained model
             model_dir = Path("ml/models")
             model_loaded = False
-            
+
             if model_dir.exists():
-                # UPDATED PRIORITY: Use poker_cards_best.pt (tested and proven best)
-                # poker_cards_best.pt > others (ultimate is worst)
-                best_model = model_dir / "poker_cards_best.pt"
-                best_finetuning = model_dir / "poker_cards_best_finetuning.pt"
-                ultimate_model = model_dir / "poker_ultimate_best.pt"
+                # PRIORITY: Use new YOLOv11 model (poker_yolov11_whole_cards_CLEAN.pt)
+                yolov11_model = model_dir / "poker_yolov11_whole_cards_CLEAN.pt"
+                yolov8_best = model_dir / "poker_cards_best.pt"
 
-                # Try poker_cards_best.pt first (proven best in testing)
-                if best_model.exists():
-                    logger.info(f"Loading best tested model: {best_model}")
-                    model_loaded = self.card_detector.load_model(str(best_model))
+                # Try YOLOv11 model first (newest and best)
+                if yolov11_model.exists():
+                    logger.info(f"🚀 Loading new YOLOv11 model: {yolov11_model}")
+                    print(f"🚀 Loading new YOLOv11 model: {yolov11_model}")
+                    print(f"📦 Model size: {os.path.getsize(yolov11_model) / 1024 / 1024:.1f} MB")
+                    model_loaded = self.card_detector.load_model(str(yolov11_model))
                     if model_loaded:
-                        logger.info("✅ Best tested model (poker_cards_best.pt) loaded successfully")
+                        logger.info("✅ YOLOv11 model loaded successfully!")
+                        print("✅ YOLOv11 model loaded successfully!")
                     else:
-                        logger.error("❌ Failed to load best model")
+                        logger.error("❌ Failed to load YOLOv11 model")
+                        print("❌ Failed to load YOLOv11 model")
 
-                # Fallback to finetuning model
-                if not model_loaded and best_finetuning.exists():
-                    logger.info(f"Loading finetuning model: {best_finetuning}")
-                    model_loaded = self.card_detector.load_model(str(best_finetuning))
+                # Fallback to YOLOv8 model if YOLOv11 fails
+                if not model_loaded and yolov8_best.exists():
+                    logger.info(f"⚠️ Falling back to YOLOv8 model: {yolov8_best}")
+                    print(f"⚠️ Falling back to YOLOv8 model: {yolov8_best}")
+                    model_loaded = self.card_detector.load_model(str(yolov8_best))
                     if model_loaded:
-                        logger.info("✅ Finetuning model loaded successfully")
+                        logger.info("✅ YOLOv8 fallback model loaded successfully")
+                        print("✅ YOLOv8 fallback model loaded successfully")
                     else:
-                        logger.error("❌ Failed to load finetuning model")
+                        logger.error("❌ Failed to load YOLOv8 fallback model")
+                        print("❌ Failed to load YOLOv8 fallback model")
 
-                # Last resort: try best_model again if exists
-                if not model_loaded and best_model.exists():
-                    logger.info(f"Loading original best model: {best_model}")
-                    model_loaded = self.card_detector.load_model(str(best_model))
-                    if model_loaded:
-                        logger.info("✅ Original best model (poker_cards_best.pt) loaded successfully")
-                    else:
-                        logger.error("❌ Failed to load original best model")
-
-                # Last resort: ultimate model (performs poorly)
-                if not model_loaded and ultimate_model.exists():
-                    logger.warning(f"Loading ultimate model (poor performance): {ultimate_model}")
-                    model_loaded = self.card_detector.load_model(str(ultimate_model))
-                    if model_loaded:
-                        logger.warning("⚠️ Ultimate model loaded - may have poor performance")
-                    else:
-                        logger.error("❌ Failed to load ultimate model")
-
-                # Try any other .pt file
+                # Last resort: try any other .pt file
                 if not model_loaded:
-                    # Try any .pt file in the models directory
+                    logger.warning("⚠️ No primary models loaded, searching for any .pt file...")
+                    print("⚠️ No primary models loaded, searching for any .pt file...")
                     pt_files = list(model_dir.glob("*.pt"))
                     for model_file in pt_files:
+                        # Skip the ones we already tried
+                        if model_file.name in ["poker_yolov11_whole_cards_CLEAN.pt", "poker_cards_best.pt"]:
+                            continue
                         logger.info(f"Trying model: {model_file}")
+                        print(f"Trying model: {model_file}")
                         model_loaded = self.card_detector.load_model(str(model_file))
                         if model_loaded:
                             logger.info(f"✅ Model loaded: {model_file}")
+                            print(f"✅ Model loaded: {model_file}")
                             break
                         else:
                             logger.warning(f"Failed to load: {model_file}")
+                            print(f"Failed to load: {model_file}")
             
             if not model_loaded:
                 logger.error("❌ No model could be loaded! Detection will fail.")
@@ -267,19 +254,54 @@ class ImageProcessor:
                 logger.warning("No cards detected by ML model")
                 return [], {}
 
-            # Convert detection objects to dictionaries
+            # CRITICAL FIX: Return only cards that were accepted by game analyzer, not all raw detections
+            # The game analyzer filters out duplicates and invalid cards
+            # We need to match the detections with the cards actually used in the game
+
+            # Extract card names that are actually in the game
+            accepted_card_names = set()
+
+            # Add community cards
+            if 'community_cards' in game_analysis:
+                accepted_card_names.update(game_analysis['community_cards'])
+
+            # Add player cards
+            if 'players' in game_analysis:
+                for player in game_analysis['players']:
+                    if 'hole_cards' in player:
+                        accepted_card_names.update(player['hole_cards'])
+
+            logger.info(f"🔍 Accepted cards from game analysis: {accepted_card_names}")
+            logger.info(f"🔍 Total raw detections: {len(detections)}")
+
+            # Filter detections to only include accepted cards
             results = []
             for detection in detections:
-                detection_dict = {
-                    'card': detection.card_name,
-                    'confidence': float(detection.confidence),
-                    'bbox': detection.bbox,
-                    'center': list(detection.center)
-                }
-                results.append(detection_dict)
+                # Check if this detection's card name is in the accepted set
+                # Note: need to handle case differences (As vs AS, etc.)
+                card_name_normalized = detection.card_name.upper()
+
+                # Check all accepted cards (also normalized)
+                is_accepted = any(
+                    card_name_normalized == accepted.upper()
+                    for accepted in accepted_card_names
+                )
+
+                if is_accepted:
+                    detection_dict = {
+                        'card': detection.card_name,
+                        'confidence': float(detection.confidence),
+                        'bbox': detection.bbox,
+                        'center': list(detection.center),
+                        'group': self._determine_card_group(detection, game_analysis)  # Add group info
+                    }
+                    results.append(detection_dict)
+                    logger.info(f"  ✅ Kept: {detection.card_name} ({detection.confidence:.3f})")
+                else:
+                    logger.info(f"  ❌ Filtered: {detection.card_name} ({detection.confidence:.3f}) - not in game analysis")
 
             inference_time = game_analysis.get('inference_time', 0.0)
-            logger.info(f"ML detection complete: {len(results)} cards, inference: {inference_time:.3f}s")
+            logger.info(f"ML detection complete: {len(results)}/{len(detections)} cards kept, inference: {inference_time:.3f}s")
 
             return results, game_analysis
             
@@ -290,6 +312,30 @@ class ImageProcessor:
             # Fall back to regular detection
             return self._ml_card_detection(image, image_shape), {}
     
+    def _determine_card_group(self, detection, game_analysis: Dict) -> str:
+        """Determine which group (player1, player2, community) a card belongs to"""
+        card_name = detection.card_name.upper()
+
+        # Check players
+        if 'players' in game_analysis:
+            for player in game_analysis['players']:
+                if 'hole_cards' in player:
+                    player_cards = [c.upper() for c in player['hole_cards']]
+                    if card_name in player_cards:
+                        # Determine if player1 or player2 based on player position/name
+                        if player.get('position') == 'top' or player.get('name') == 'Player 1 (Top)':
+                            return 'player1'
+                        elif player.get('position') == 'bottom' or player.get('name') == 'Player 2 (Bottom)':
+                            return 'player2'
+
+        # Check community
+        if 'community_cards' in game_analysis:
+            community_cards = [c.upper() for c in game_analysis['community_cards']]
+            if card_name in community_cards:
+                return 'community'
+
+        return 'unassigned'
+
     def _mock_card_detection_enhanced(self, img_array: np.ndarray) -> List[Dict]:
         """
         Enhanced mock card detection function that returns structured results

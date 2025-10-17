@@ -172,43 +172,92 @@ class PokerGameAnalyzer:
         logger.info(f"  Top zone ({TOP_ZONE_LIMIT*100:.0f}%): {[d['card_name'] for d in top_zone]}")
         logger.info(f"  Middle zone ({MIDDLE_ZONE_START*100:.0f}-{MIDDLE_ZONE_END*100:.0f}%): {[d['card_name'] for d in middle_zone]}")
         logger.info(f"  Bottom zone ({BOTTOM_ZONE_START*100:.0f}%+): {[d['card_name'] for d in bottom_zone]}")
+
+        # CRITICAL FIX: Handle duplicate ranks within PLAYER zones only
+        # Players can have max 2 cards of different ranks
+        # If a player zone has 2 cards with same rank, keep highest confidence and remove the other
+
+        def remove_duplicate_ranks_in_zone(zone_cards, zone_name):
+            """Remove duplicate ranks within a single zone, keeping highest confidence"""
+            if not zone_cards:
+                return zone_cards
+
+            rank_map = {}  # rank -> list of cards with that rank
+            for card in zone_cards:
+                rank = card['card_name'][0]  # First char is rank (A, 2, K, etc.)
+                if rank not in rank_map:
+                    rank_map[rank] = []
+                rank_map[rank].append(card)
+
+            # Build cleaned list - for each rank, keep only highest confidence
+            cleaned = []
+            for rank, cards_with_rank in rank_map.items():
+                if len(cards_with_rank) > 1:
+                    # Sort by confidence and keep best
+                    best_card = max(cards_with_rank, key=lambda x: x['confidence'])
+                    cleaned.append(best_card)
+                    logger.info(f"  🔧 {zone_name}: Found {len(cards_with_rank)} cards with rank '{rank}'")
+                    logger.info(f"     Keeping: {best_card['card_name']} ({best_card['confidence']:.3f})")
+                    for card in cards_with_rank:
+                        if card != best_card:
+                            logger.info(f"     Removing: {card['card_name']} ({card['confidence']:.3f}) - duplicate rank")
+                else:
+                    cleaned.append(cards_with_rank[0])
+
+            return cleaned
+
+        # Apply duplicate rank removal to player zones (not community - community can have duplicates legitimately)
+        top_zone = remove_duplicate_ranks_in_zone(top_zone, "Top zone")
+        bottom_zone = remove_duplicate_ranks_in_zone(bottom_zone, "Bottom zone")
+
+        logger.info("🔍 After duplicate rank removal:")
+        logger.info(f"  Top zone: {[d['card_name'] for d in top_zone]}")
+        logger.info(f"  Middle zone: {[d['card_name'] for d in middle_zone]}")
+        logger.info(f"  Bottom zone: {[d['card_name'] for d in bottom_zone]}")
         
         # Second pass: Apply poker rules
-        # Player 1 - max 2 cards, leftmost if more
+        # Player 1 - max 2 cards, highest confidence if more
         if len(top_zone) > 2:
-            top_zone_sorted = sorted(top_zone, key=lambda x: x['center'][0])
-            groups['player1'] = top_zone_sorted[:2]
+            # Sort by confidence (descending) to keep the best detections
+            top_zone_sorted = sorted(top_zone, key=lambda x: x['confidence'], reverse=True)
+            kept_cards = top_zone_sorted[:2]
+            # Sort kept cards by X position for display
+            groups['player1'] = sorted(kept_cards, key=lambda x: x['center'][0])
             # Extra cards go to community
             for card in top_zone_sorted[2:]:
                 middle_zone.append(card)
-                logger.info(f"  Moved {card['card_name']} from player1 to community (excess)")
+                logger.info(f"  Moved {card['card_name']} from player1 to community (excess, lower confidence)")
         else:
-            groups['player1'] = top_zone
+            groups['player1'] = sorted(top_zone, key=lambda x: x['center'][0])
         
-        # Player 2 - max 2 cards, leftmost if more
+        # Player 2 - max 2 cards, highest confidence if more
         if len(bottom_zone) > 2:
-            bottom_zone_sorted = sorted(bottom_zone, key=lambda x: x['center'][0])
-            groups['player2'] = bottom_zone_sorted[:2]
+            # Sort by confidence (descending) to keep the best detections
+            bottom_zone_sorted = sorted(bottom_zone, key=lambda x: x['confidence'], reverse=True)
+            kept_cards = bottom_zone_sorted[:2]
+            # Sort kept cards by X position for display
+            groups['player2'] = sorted(kept_cards, key=lambda x: x['center'][0])
             # Extra cards go to community
             for card in bottom_zone_sorted[2:]:
                 middle_zone.append(card)
-                logger.info(f"  Moved {card['card_name']} from player2 to community (excess)")
+                logger.info(f"  Moved {card['card_name']} from player2 to community (excess, lower confidence)")
         else:
-            groups['player2'] = bottom_zone
+            groups['player2'] = sorted(bottom_zone, key=lambda x: x['center'][0])
         
-        # Community - max 5 cards, most centered if more
+        # Community - max 5 cards, highest confidence if more
         if len(middle_zone) > 5:
-            # Keep 5 most centered cards
-            center_x = width / 2
-            middle_zone_sorted = sorted(middle_zone, key=lambda x: abs(x['center'][0] - center_x))
-            groups['community'] = middle_zone_sorted[:5]
-            logger.info(f"  Limited community to 5 most centered cards")
+            # FIXED: Keep 5 highest confidence cards instead of "most centered"
+            # The "centered" logic was keeping wrong cards (Qd, 3s) instead of correct ones (3c, 6h)
+            middle_zone_sorted = sorted(middle_zone, key=lambda x: x['confidence'], reverse=True)
+            kept_community = middle_zone_sorted[:5]
+            # Sort kept cards by X position for display
+            groups['community'] = sorted(kept_community, key=lambda x: x['center'][0])
+            logger.info(f"  Limited community to 5 highest confidence cards")
+            logger.info(f"    Kept: {[c['card_name'] for c in kept_community]}")
+            logger.info(f"    Removed: {[c['card_name'] for c in middle_zone_sorted[5:]]}")
         else:
-            groups['community'] = middle_zone
-        
-        # Sort each group by X position (left to right)
-        for key in groups:
-            groups[key] = sorted(groups[key], key=lambda x: x['center'][0])
+            # Sort community cards by X position for display
+            groups['community'] = sorted(middle_zone, key=lambda x: x['center'][0])
         
         # Final logging
         logger.info("🔧 Final card groups:")

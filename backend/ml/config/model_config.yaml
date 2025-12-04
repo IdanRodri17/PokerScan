@@ -1,8 +1,8 @@
-# PokerVision YOLOv8 Model Configuration
+# PokerVision YOLOv11 Model Configuration
 
 # Model Settings - Optimized for real-world poker images
 model:
-  name: "yolov8m"  # Architecture: YOLOv8m (49.7MB model)
+  name: "yolov11"  # Architecture: YOLOv11 (39MB model - poker_yolov11_whole_cards_CLEAN.pt)
   input_size: 1280  # High resolution for card detail detection
   confidence_threshold: 0.25  # OPTIMIZED: Balanced - catches cards, filters noise
   iou_threshold: 0.30  # FIXED: Proper NMS for duplicate suppression

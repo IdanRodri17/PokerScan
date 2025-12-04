@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PokerVision</string>
+    <string name="title_activity_main">PokerVision</string>
+    <string name="package_name">com.pokervision.app</string>
+    <string name="custom_url_scheme">com.pokervision.app</string>
+</resources>

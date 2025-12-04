@@ -1,4 +1,6 @@
 import React, { useState, useRef } from 'react';
+import { Camera } from '@capacitor/camera';
+import { Capacitor } from '@capacitor/core';
 import { apiService } from '../services/api';
 
 const ImageUpload = ({ onUploadSuccess, onUploadError }) => {
@@ -61,14 +63,56 @@ const ImageUpload = ({ onUploadSuccess, onUploadError }) => {
     fileInputRef.current?.click();
   };
 
+  const takePicture = async () => {
+    try {
+      const image = await Camera.getPhoto({
+        quality: 90,
+        allowEditing: false,
+        resultType: 'uri',
+        source: 'camera'
+      });
+
+      // Convert image URI to blob/file
+      const response = await fetch(image.webPath);
+      const blob = await response.blob();
+      const file = new File([blob], 'poker-table.jpg', { type: 'image/jpeg' });
+
+      handleFileUpload(file);
+    } catch (error) {
+      console.error('Camera error:', error);
+      onUploadError?.('Failed to capture image from camera');
+    }
+  };
+
+  const isNativePlatform = Capacitor.isNativePlatform();
+
   return (
     <div className="card">
+      {isNativePlatform && (
+        <div className="mb-4 flex gap-3">
+          <button
+            onClick={takePicture}
+            disabled={isUploading}
+            className="flex-1 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-6 py-3 rounded-lg font-medium hover:from-blue-700 hover:to-blue-800 transition-all shadow-md disabled:opacity-50"
+          >
+            📷 Take Photo
+          </button>
+          <button
+            onClick={openFileDialog}
+            disabled={isUploading}
+            className="flex-1 bg-gradient-to-r from-green-600 to-green-700 text-white px-6 py-3 rounded-lg font-medium hover:from-green-700 hover:to-green-800 transition-all shadow-md disabled:opacity-50"
+          >
+            📁 Choose File
+          </button>
+        </div>
+      )}
+
       <div
         className={`upload-zone ${isDragging ? 'dragover' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={openFileDialog}
+        onClick={!isNativePlatform ? openFileDialog : undefined}
       >
         <input
           ref={fileInputRef}
@@ -77,7 +121,7 @@ const ImageUpload = ({ onUploadSuccess, onUploadError }) => {
           onChange={handleFileSelect}
           className="hidden"
         />
-        
+
         {isUploading ? (
           <div className="flex flex-col items-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mb-4"></div>
@@ -99,10 +143,12 @@ const ImageUpload = ({ onUploadSuccess, onUploadError }) => {
               />
             </svg>
             <h3 className="text-lg font-medium text-gray-900 mb-2">
-              Upload a poker image
+              {isNativePlatform ? 'Upload a poker image' : 'Upload a poker image'}
             </h3>
             <p className="text-gray-600 mb-4">
-              Drag and drop your image here, or click to browse
+              {isNativePlatform
+                ? 'Tap the buttons above to take a photo or choose from gallery'
+                : 'Drag and drop your image here, or click to browse'}
             </p>
             <p className="text-sm text-gray-500">
               Supports: JPG, PNG, WebP (max 10MB)

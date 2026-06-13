@@ -375,64 +375,6 @@ class PokerGameAnalyzer:
             
         return groups
     
-    def _validate_card_groups(self, groups: Dict):
-        """Validate that card groups make sense for poker"""
-        # Each player should have exactly 2 cards
-        for player in ['player1', 'player2']:
-            if len(groups[player]) != 2 and len(groups[player]) != 0:
-                logger.warning(f"{player} has {len(groups[player])} cards, expected 2 or 0")
-        
-        # Community should have 3-5 cards
-        if not (3 <= len(groups['community']) <= 5):
-            logger.warning(f"Community has {len(groups['community'])} cards, expected 3-5")
-    
-    def _create_game_state(self, grouped_cards: Dict) -> GameState:
-        """Create GameState from grouped cards"""
-        # Parse community cards
-        community_cards = []
-        for det in grouped_cards['community']:
-            card = self._parse_card(det['card_name'])
-            if card:
-                community_cards.append(card)
-        
-        # Create players
-        players = []
-        
-        # Player 1 (top)
-        if len(grouped_cards['player1']) >= 2:
-            player1_cards = []
-            for det in grouped_cards['player1'][:2]:
-                card = self._parse_card(det['card_name'])
-                if card:
-                    player1_cards.append(card)
-            
-            players.append(Player(
-                id=1,
-                name="Player 1 (Top)",
-                hole_cards=player1_cards,
-                position="top"
-            ))
-        
-        # Player 2 (bottom)
-        if len(grouped_cards['player2']) >= 2:
-            player2_cards = []
-            for det in grouped_cards['player2'][:2]:
-                card = self._parse_card(det['card_name'])
-                if card:
-                    player2_cards.append(card)
-            
-            players.append(Player(
-                id=2,
-                name="Player 2 (Bottom)",
-                hole_cards=player2_cards,
-                position="bottom"
-            ))
-        
-        return GameState(
-            community_cards=community_cards,
-            players=players
-        )
-    
     def _parse_card(self, card_str: str) -> Optional[Card]:
         """Parse card string into Card object - handles various formats"""
         if not card_str:

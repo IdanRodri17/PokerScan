@@ -150,7 +150,7 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.4, duration: 0.4 }}
             >
-              {['100% Accurate', 'Instant Results', 'All Poker Variants'].map((feature, index) => (
+              {['AI-Powered', 'Instant Results', 'All Poker Variants'].map((feature, index) => (
                 <div key={feature} className="flex items-center gap-2 text-green-400">
                   <CheckCircle size={16} />
                   <span>{feature}</span>
@@ -359,8 +359,8 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
                     <p>
                       <span className="text-yellow-400 font-bold">PokerVision</span> ends these disputes 
                       instantly! Just take a photo of your poker table, and our AI will analyze every 
-                      card, evaluate both hands using official poker rules, and declare the winner 
-                      with <span className="text-green-400 font-semibold">100% accuracy</span>.
+                      card, evaluate both hands using official poker rules, and declare the winner
+                      with <span className="text-green-400 font-semibold">AI-powered analysis</span>.
                     </p>
                   </motion.div>
                 </div>
@@ -397,7 +397,7 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
                         </li>
                       </ul>
                       <p className="text-sm text-gray-400 italic mt-4">
-                        💡 Keep cards clearly visible and well-lit for instant, accurate results!
+                        💡 Keep cards clearly visible and well-lit for the best results!
                       </p>
                     </div>
 
@@ -453,7 +453,7 @@ const PokerLandingPage = ({ onImageUpload, isProcessing }) => {
           >
             <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
               {[
-                { icon: <Target className="w-6 h-6" />, text: "100% Accuracy", color: "text-green-400" },
+                { icon: <Target className="w-6 h-6" />, text: "Hand Analysis", color: "text-green-400" },
                 { icon: <Clock className="w-6 h-6" />, text: "Instant Results", color: "text-blue-400" },
                 { icon: <Sparkles className="w-6 h-6" />, text: "AI Powered", color: "text-purple-400" },
                 { icon: <Trophy className="w-6 h-6" />, text: "Winner Detection", color: "text-yellow-400" }

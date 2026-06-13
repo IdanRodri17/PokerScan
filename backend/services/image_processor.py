@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 # Import ML components
 try:
     from ml.card_detector import create_card_detector, YOLOv8CardDetector
-    from ml.spatial_analyzer import PokerSpatialAnalyzer
     from ml.hand_evaluator import create_hand_evaluator
     ML_AVAILABLE = True
 except ImportError as e:
@@ -33,7 +32,7 @@ class ImageProcessor:
             logger.warning("ML components not available, falling back to mock detection")
     
     def _initialize_ml_components(self) -> bool:
-        """Initialize ML components (card detector and spatial analyzer)"""
+        """Initialize ML components (card detector and hand evaluator)"""
         import os
 
         try:
@@ -97,13 +96,6 @@ class ImageProcessor:
             if not model_loaded:
                 logger.error("❌ No model could be loaded! Detection will fail.")
                 return False
-            
-            # Initialize spatial analyzer
-            config_path = Path("ml/config/model_config.yaml")
-            if config_path.exists():
-                self.spatial_analyzer = PokerSpatialAnalyzer(str(config_path))
-            else:
-                self.spatial_analyzer = PokerSpatialAnalyzer()
             
             # Initialize hand evaluator
             self.hand_evaluator = create_hand_evaluator()

@@ -60,6 +60,30 @@ model isn't loaded (so you never measure mock detections by accident).
 - **Card notation:** rank + suit. Suit ∈ `s h d c` (case-insensitive). Ten may be
   `10` or `T`. So `As`, `AS`, `10c`, `Tc` are all accepted.
 
+## Converting a Roboflow / YOLO export
+
+If your photos already have YOLO bounding-box labels (a Roboflow export with
+`images/train/`, `labels/train/`, `data.yaml`), you don't need to re-label by
+hand — `labels_to_ground_truth.py` derives the grouped ground truth from the box
+positions:
+
+```bash
+python eval/labels_to_ground_truth.py \
+    --dataset eval/photos/<your_export>/<your_export> \
+    --out eval/ground_truth.json
+```
+
+It clusters each photo's boxes into top/middle/bottom rows (player1 / community /
+player2) and prints the row-size distribution plus any photo that didn't form a
+clean 2 / 3–5 / 2 layout.
+
+> ⚠️ **Verify the labels actually match the images.** A YOLO `.txt` only matches
+> its `.jpg` if they came from the same annotation run. If you combine images from
+> one place with labels from another, the filenames can line up while the contents
+> don't — the harness then reports a low "detection" score that is really a
+> ground-truth mismatch, **not** a model failure. Open a few photos and check them
+> against the generated `ground_truth.json` before trusting any number.
+
 ## How many photos?
 
 - **Start** with ~30–50 labelled photos for a first directional read.

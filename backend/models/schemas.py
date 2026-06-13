@@ -65,6 +65,14 @@ class GameAnalysis(BaseModel):
     tie: bool = False
     tied_players: Optional[List[Dict[str, Any]]] = None
 
+class PhotoQuality(BaseModel):
+    """Heuristic 'is this photo good enough?' signals for the retake gate."""
+    ok: bool
+    reasons: List[str] = []
+    cards_detected: int = 0
+    median_card_area_pct: Optional[float] = None
+    layout_confidence: Optional[float] = None
+
 class ImageUploadResponse(BaseModel):
     """Enhanced response with structured card detection results"""
     success: bool
@@ -75,7 +83,8 @@ class ImageUploadResponse(BaseModel):
     processing_time: Optional[float] = None
     game_analysis: Optional[GameAnalysis] = None  # Complete poker game analysis
     visualization_path: Optional[str] = None  # Path to annotated visualization image
-    
+    photo_quality: Optional[PhotoQuality] = None  # Retake gate: is the photo usable?
+
     # Backward compatibility
     cards_detected: Optional[List[str]] = None  # Simple card names for backward compatibility
 

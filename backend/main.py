@@ -6,13 +6,15 @@ import logging
 import os
 from datetime import datetime
 from io import BytesIO
-from PIL import UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 
 from models.schemas import (
     ImageUploadResponse, HealthCheckResponse, ErrorResponse, ModelStatusResponse,
-    EvaluateWinnerRequest, EvaluateWinnerResponse, GameAnalysis, PlayerInfo, WinnerInfo
+    EvaluateWinnerRequest, EvaluateWinnerResponse, GameAnalysis, PlayerInfo, WinnerInfo,
+    PhotoQuality
 )
 from services.image_processor import ImageProcessor
+from services.photo_quality import assess_photo_quality
 from ml.hand_evaluator import create_hand_evaluator
 
 # Configure logging
@@ -125,7 +127,18 @@ async def upload_image(
             analyze_game=True,
             create_visualization=create_visualization
         )
-        
+
+        # Photo-quality gate: turn the detection signals into an "is this photo
+        # usable?" verdict so the UI can nudge a retake instead of a wrong result.
+        photo_quality = None
+        try:
+            img_w, img_h = Image.open(BytesIO(content)).size
+            layout_conf = game_analysis.get('layout_confidence') if game_analysis else None
+            photo_quality = assess_photo_quality(detection_results, (img_h, img_w), layout_conf)
+            logger.info(f"Photo quality: {photo_quality}")
+        except Exception as e:
+            logger.warning(f"Photo-quality assessment failed: {e}")
+
         # Extract simple card names for backward compatibility
         simple_card_names = []
         for section in detection_results:
@@ -203,7 +216,8 @@ async def upload_image(
             cards_detected=simple_card_names,  # Backward compatibility
             processing_time=processing_time,
             game_analysis=game_analysis_response,
-            visualization_path=visualization_path
+            visualization_path=visualization_path,
+            photo_quality=PhotoQuality(**photo_quality) if photo_quality else None
         )
         
     except HTTPException:

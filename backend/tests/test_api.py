@@ -32,7 +32,13 @@ def test_version_endpoint():
 def test_sample_png_upload_succeeds():
     r = client.post("/upload", files={"file": ("hand.png", _png_bytes(), "image/png")})
     assert r.status_code == 200
-    assert r.json()["success"] is True
+    body = r.json()
+    assert body["success"] is True
+    # The photo-quality gate is always present; a blank test image has no cards,
+    # so it should flag (ok=False) rather than be absent.
+    assert body.get("photo_quality") is not None
+    assert body["photo_quality"]["ok"] is False
+    assert body["photo_quality"]["cards_detected"] == 0
 
 
 def test_upload_rejects_too_large_with_413():

@@ -50,10 +50,20 @@ def cluster_rows(cards):
     return rows
 
 
+def _find_split_dirs(ds):
+    """Locate the images/ and labels/ dirs across common Roboflow / YOLO layouts."""
+    for img, lbl in [(ds / 'images' / 'train', ds / 'labels' / 'train'),
+                     (ds / 'train' / 'images', ds / 'train' / 'labels'),
+                     (ds / 'images', ds / 'labels')]:
+        if img.is_dir() and lbl.is_dir():
+            return img, lbl
+    raise SystemExit(f"Could not find images/ and labels/ dirs under {ds}")
+
+
 def convert(dataset_dir):
     ds = Path(dataset_dir)
     names = load_class_names(ds / 'data.yaml')
-    img_dir, lbl_dir = ds / 'images' / 'train', ds / 'labels' / 'train'
+    img_dir, lbl_dir = _find_split_dirs(ds)
     ground_truth, warnings = {}, []
 
     for lbl in sorted(lbl_dir.glob('*.txt')):

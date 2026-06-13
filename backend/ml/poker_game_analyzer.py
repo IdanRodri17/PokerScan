@@ -228,7 +228,7 @@ class PokerGameAnalyzer:
 
         # Players: drop duplicate ranks, then keep the 2 highest-confidence cards.
         for player in ('player1', 'player2'):
-            cards = self._dedupe_player_ranks(raw_groups[player], player)
+            cards = self._dedupe_player_cards(raw_groups[player], player)
             cards = sorted(cards, key=self._by_confidence)[:2]
             groups[player] = sorted(cards, key=lambda c: c['center'][0])
 
@@ -239,31 +239,29 @@ class PokerGameAnalyzer:
         return groups
 
     @staticmethod
-    def _card_rank(card_name: str) -> str:
-        """Rank of a card name with the trailing suit removed ('10c' -> '10', 'As' -> 'A')."""
-        return card_name[:-1] if len(card_name) > 1 else card_name
+    def _dedupe_player_cards(cards: List[Dict], zone_name: str = "") -> List[Dict]:
+        """Within a player row, drop exact duplicate detections of the SAME card,
+        keeping the highest-confidence one.
 
-    @staticmethod
-    def _dedupe_player_ranks(cards: List[Dict], zone_name: str = "") -> List[Dict]:
-        """Within a player row, keep only the highest-confidence card per rank.
-
-        Ties are broken deterministically (see _by_confidence) so the kept card
-        never depends on detection order.
+        Deduping by full card identity (rank + suit) -- not by rank -- preserves a
+        genuine pocket pair (e.g. As + Ah); only a repeated detection of one
+        physical card (e.g. As + As) is collapsed. Ties are broken deterministically
+        (see _by_confidence) so the result never depends on detection order.
         """
         if not cards:
             return list(cards)
 
-        rank_map = {}
+        by_card = {}
         for card in cards:
-            rank_map.setdefault(PokerGameAnalyzer._card_rank(card['card_name']), []).append(card)
+            by_card.setdefault(card['card_name'].upper(), []).append(card)
 
         cleaned = []
-        for rank, same_rank in rank_map.items():
-            best = sorted(same_rank, key=PokerGameAnalyzer._by_confidence)[0]
+        for card_name, duplicates in by_card.items():
+            best = sorted(duplicates, key=PokerGameAnalyzer._by_confidence)[0]
             cleaned.append(best)
-            if len(same_rank) > 1:
-                logger.info("  🔧 %s: kept %s for rank '%s', dropped %d duplicate(s)",
-                            zone_name, best['card_name'], rank, len(same_rank) - 1)
+            if len(duplicates) > 1:
+                logger.info("  🔧 %s: kept %s, dropped %d duplicate detection(s)",
+                            zone_name, best['card_name'], len(duplicates) - 1)
         return cleaned
 
     @staticmethod

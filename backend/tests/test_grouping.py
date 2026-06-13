@@ -127,3 +127,45 @@ def test_layout_confidence_surfaced_in_result_dict():
     assert 'layout_confidence' in result
     assert 0.0 <= result['layout_confidence'] <= 1.0
     assert result['layout_confidence'] > 0.9
+
+
+def test_pocket_pair_preserved():
+    # A pocket pair (two same-rank, different-suit cards) must stay as two cards.
+    names, conf = group([
+        det('As', 0.95, 100, 150), det('Ah', 0.9, 200, 150),   # pocket aces
+        det('Qh', 0.9, 100, 500), det('Jd', 0.9, 200, 500), det('9s', 0.9, 300, 500),
+        det('2d', 0.9, 100, 850), det('7c', 0.9, 200, 850),
+    ])
+    assert names['player1'] == {'As', 'Ah'}
+
+
+def test_pocket_tens_preserved():
+    names, conf = group([
+        det('10c', 0.9, 100, 150), det('10d', 0.9, 200, 150),  # pocket tens
+        det('Qh', 0.9, 100, 500), det('Jd', 0.9, 200, 500), det('9s', 0.9, 300, 500),
+        det('2d', 0.9, 100, 850), det('7c', 0.9, 200, 850),
+    ])
+    assert names['player1'] == {'10c', '10d'}
+
+
+def test_exact_duplicate_detection_removed():
+    # The SAME physical card detected twice collapses to the higher-confidence one.
+    deduped = PokerGameAnalyzer._dedupe_player_cards([
+        det('As', 0.9, 100, 150), det('As', 0.4, 110, 150),
+    ])
+    assert len(deduped) == 1
+    assert deduped[0]['card_name'] == 'As'
+    assert deduped[0]['confidence'] == 0.9
+
+
+def test_pocket_pair_player_kept_end_to_end():
+    # The player holding a pocket pair must survive into the result as a 2-card player.
+    result = analyze_poker_game([
+        det('As', 0.95, 100, 150), det('Ah', 0.9, 200, 150),   # pocket aces
+        det('Qh', 0.9, 100, 500), det('Jd', 0.9, 200, 500), det('9s', 0.9, 300, 500),
+        det('Kd', 0.9, 400, 500), det('5c', 0.9, 500, 500),
+        det('2d', 0.9, 100, 850), det('7c', 0.9, 200, 850),
+    ], (H, W))
+    p1 = next((p for p in result['players'] if p['id'] == 1), None)
+    assert p1 is not None
+    assert set(p1['hole_cards']) == {'AS', 'AH'}

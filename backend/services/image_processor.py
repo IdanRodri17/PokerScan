@@ -10,6 +10,15 @@ from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
+# Activate HEIC/HEIF support so iPhone photos (.heic/.heif) open via PIL.
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    HEIF_SUPPORTED = True
+except Exception as e:  # pragma: no cover - optional native dependency
+    logger.warning(f"pillow_heif unavailable; HEIC/HEIF uploads disabled: {e}")
+    HEIF_SUPPORTED = False
+
 # Import ML components
 try:
     from ml.card_detector import create_card_detector, YOLOv8CardDetector
@@ -24,7 +33,12 @@ class ImageProcessor:
     
     def __init__(self):
         self.supported_formats = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
-        
+        if HEIF_SUPPORTED:
+            self.supported_formats |= {'.heic', '.heif'}
+
+        # Name of the model file actually loaded (surfaced by /version).
+        self.model_filename = None
+
         # Initialize ML components
         self.ml_enabled = ML_AVAILABLE and self._initialize_ml_components()
         
@@ -55,6 +69,7 @@ class ImageProcessor:
                     print(f"📦 Model size: {os.path.getsize(yolov11_model) / 1024 / 1024:.1f} MB")
                     model_loaded = self.card_detector.load_model(str(yolov11_model))
                     if model_loaded:
+                        self.model_filename = yolov11_model.name
                         logger.info("✅ YOLOv11 model loaded successfully!")
                         print("✅ YOLOv11 model loaded successfully!")
                     else:
@@ -67,6 +82,7 @@ class ImageProcessor:
                     print(f"⚠️ Falling back to YOLOv8 model: {yolov8_best}")
                     model_loaded = self.card_detector.load_model(str(yolov8_best))
                     if model_loaded:
+                        self.model_filename = yolov8_best.name
                         logger.info("✅ YOLOv8 fallback model loaded successfully")
                         print("✅ YOLOv8 fallback model loaded successfully")
                     else:
@@ -86,6 +102,7 @@ class ImageProcessor:
                         print(f"Trying model: {model_file}")
                         model_loaded = self.card_detector.load_model(str(model_file))
                         if model_loaded:
+                            self.model_filename = model_file.name
                             logger.info(f"✅ Model loaded: {model_file}")
                             print(f"✅ Model loaded: {model_file}")
                             break
@@ -109,14 +126,21 @@ class ImageProcessor:
             traceback.print_exc()
             return False
     
-    def validate_image(self, image_data: bytes) -> bool:
-        """Validate if the uploaded data is a valid image"""
+    def validate_image(self, image_data) -> bool:
+        """Return True only if the bytes decode to a real image.
+
+        Fully decodes (load) rather than just verify(), so truncated/corrupt
+        files -- and HEIC that pillow_heif cannot read -- are rejected here (so
+        the caller returns a clear 400) instead of failing later (500).
+        """
         try:
-            image = Image.open(image_data)
-            image.verify()
+            if hasattr(image_data, "seek"):
+                image_data.seek(0)
+            with Image.open(image_data) as image:
+                image.load()
             return True
         except Exception as e:
-            logger.error(f"Image validation failed: {str(e)}")
+            logger.warning(f"Image validation failed: {str(e)}")
             return False
     
     def process_image(self, image_data: bytes, filename: str, analyze_game: bool = True, create_visualization: bool = False) -> Tuple[List[Dict], float, Optional[Dict], Optional[str]]:
@@ -430,6 +454,7 @@ class ImageProcessor:
                 # Check if model is actually loaded
                 if self.card_detector.model is not None:
                     status["model_loaded"] = True
+                    status["model_file"] = self.model_filename
                     status["model_device"] = str(self.card_detector.device)
                     status["performance_stats"] = self.card_detector.get_performance_stats()
                 else:

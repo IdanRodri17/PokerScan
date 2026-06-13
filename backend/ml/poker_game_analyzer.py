@@ -12,6 +12,13 @@ from ml.hand_evaluator import create_hand_evaluator, PokerHand as EvaluatedHand
 
 logger = logging.getLogger(__name__)
 
+# Adaptive row-clustering parameters
+MAX_ROWS = 3
+# A vertical gap must exceed this fraction of the image height to separate two
+# rows. This is a scale (minimum row separation), NOT a fixed band position:
+# rows are detected wherever the cards actually are.
+MIN_ROW_GAP_FRACTION = 0.08
+
 
 @dataclass
 class Card:
@@ -40,6 +47,7 @@ class GameState:
     winner: Optional[Player] = None
     tie: bool = False
     tied_players: List[Player] = None
+    layout_confidence: float = 1.0  # 0-1: how cleanly the card rows separated
 
 class PokerGameAnalyzer:
     """
@@ -70,12 +78,13 @@ class PokerGameAnalyzer:
         Returns:
             Complete GameState with winner determined
         """
-        # Step 1: Identify which cards belong to whom
-        grouped_cards = self._group_cards_by_position(detections, image_shape)
-        
+        # Step 1: Identify which cards belong to whom (adaptive row detection)
+        grouped_cards, layout_confidence = self._group_cards_by_position(detections, image_shape)
+
         # Step 2: Convert to Card objects
         game_state = self._create_game_state(grouped_cards)
-        
+        game_state.layout_confidence = layout_confidence
+
         # Step 3: Evaluate hands for each player
         for player in game_state.players:
             player.best_hand = self._evaluate_best_hand(
@@ -91,164 +100,189 @@ class PokerGameAnalyzer:
         
         return game_state
     
-    def _group_cards_by_position(self, detections: List[Dict], image_shape: Tuple[int, int]) -> Dict:
+    def _group_cards_by_position(self, detections: List[Dict],
+                                 image_shape: Tuple[int, int]) -> Tuple[Dict, float]:
         """
-        Improved grouping logic based on strict spatial zones
+        Group detected cards into player1 / community / player2 using adaptive
+        row detection instead of fixed vertical bands.
+
+        Cards are clustered into up to MAX_ROWS horizontal rows by the gaps
+        between their sorted y-centers, then identified by size and position: the
+        largest row (3-5 cards) nearest the vertical middle is the community, the
+        row above is one player and the row below the other. Handles 1, 2 and 3
+        rows (e.g. preflop has no community).
+
+        Returns the groups dict (same shape as before) and a layout_confidence in
+        [0, 1] describing how cleanly the rows separated. A low value means the
+        layout was ambiguous (a card drifting between rows) -- a good signal to
+        later ask the user for a clearer photo.
         """
         height, width = image_shape
-        
-        # Sort detections by Y position
-        sorted_by_y = sorted(detections, key=lambda x: x['center'][1])
-        
-        # Initialize groups
-        groups = {
-            'player1': [],
-            'community': [],
-            'player2': []
-        }
-        
-        # IMPROVED ZONE DEFINITIONS
-        # Based on your test results, we need stricter boundaries
-        TOP_ZONE_LIMIT = 0.20      # Top 20% for Player 1
-        MIDDLE_ZONE_START = 0.25   # Community starts at 25%
-        MIDDLE_ZONE_END = 0.70     # Community ends at 70%
-        BOTTOM_ZONE_START = 0.75   # Bottom 25% for Player 2
-        
-        # First pass: Rough grouping
-        top_zone = []
-        middle_zone = []
-        bottom_zone = []
-        
-        for det in sorted_by_y:
-            y = det['center'][1]
-            y_ratio = y / height
-            
-            if y_ratio <= TOP_ZONE_LIMIT:
-                top_zone.append(det)
-            elif y_ratio >= BOTTOM_ZONE_START:
-                bottom_zone.append(det)
-            elif MIDDLE_ZONE_START <= y_ratio <= MIDDLE_ZONE_END:
-                middle_zone.append(det)
-            else:
-                # Transition zones - assign based on nearest boundary
-                if y_ratio < MIDDLE_ZONE_START:
-                    # Between top and middle - check which is closer
-                    if y_ratio - TOP_ZONE_LIMIT < MIDDLE_ZONE_START - y_ratio:
-                        top_zone.append(det)
-                    else:
-                        middle_zone.append(det)
-                else:
-                    # Between middle and bottom
-                    if y_ratio - MIDDLE_ZONE_END < BOTTOM_ZONE_START - y_ratio:
-                        middle_zone.append(det)
-                    else:
-                        bottom_zone.append(det)
-        
-        # Debug logging
-        logger.info("🔍 Initial zone assignment:")
-        logger.info(f"  Top zone ({TOP_ZONE_LIMIT*100:.0f}%): {[d['card_name'] for d in top_zone]}")
-        logger.info(f"  Middle zone ({MIDDLE_ZONE_START*100:.0f}-{MIDDLE_ZONE_END*100:.0f}%): {[d['card_name'] for d in middle_zone]}")
-        logger.info(f"  Bottom zone ({BOTTOM_ZONE_START*100:.0f}%+): {[d['card_name'] for d in bottom_zone]}")
+        groups = {'player1': [], 'community': [], 'player2': []}
 
-        # CRITICAL FIX: Handle duplicate ranks within PLAYER zones only
-        # Players can have max 2 cards of different ranks
-        # If a player zone has 2 cards with same rank, keep highest confidence and remove the other
+        if not detections:
+            return groups, 1.0
 
-        def remove_duplicate_ranks_in_zone(zone_cards, zone_name):
-            """Remove duplicate ranks within a single zone, keeping highest confidence"""
-            if not zone_cards:
-                return zone_cards
+        # Step 1: cluster cards into rows by the vertical gaps between them
+        rows, boundary_gaps, within_gaps = self._cluster_rows(detections, height)
 
-            rank_map = {}  # rank -> list of cards with that rank
-            for card in zone_cards:
-                rank = card['card_name'][0]  # First char is rank (A, 2, K, etc.)
-                if rank not in rank_map:
-                    rank_map[rank] = []
-                rank_map[rank].append(card)
+        # Step 2: decide which row is community / player1 / player2
+        raw_groups = self._assign_rows_to_groups(rows, height)
 
-            # Build cleaned list - for each rank, keep only highest confidence
-            cleaned = []
-            for rank, cards_with_rank in rank_map.items():
-                if len(cards_with_rank) > 1:
-                    # Sort by confidence and keep best
-                    best_card = max(cards_with_rank, key=lambda x: x['confidence'])
-                    cleaned.append(best_card)
-                    logger.info(f"  🔧 {zone_name}: Found {len(cards_with_rank)} cards with rank '{rank}'")
-                    logger.info(f"     Keeping: {best_card['card_name']} ({best_card['confidence']:.3f})")
-                    for card in cards_with_rank:
-                        if card != best_card:
-                            logger.info(f"     Removing: {card['card_name']} ({card['confidence']:.3f}) - duplicate rank")
-                else:
-                    cleaned.append(cards_with_rank[0])
+        # Step 3: apply poker per-row limits + duplicate-rank removal
+        groups = self._filter_groups(raw_groups)
 
-            return cleaned
+        # Step 4: score how cleanly the rows separated
+        layout_confidence = self._compute_layout_confidence(boundary_gaps, within_gaps)
 
-        # Apply duplicate rank removal to player zones (not community - community can have duplicates legitimately)
-        top_zone = remove_duplicate_ranks_in_zone(top_zone, "Top zone")
-        bottom_zone = remove_duplicate_ranks_in_zone(bottom_zone, "Bottom zone")
+        logger.info("🔧 Adaptive grouping: %d row(s), layout_confidence=%.2f",
+                    len(rows), layout_confidence)
+        for name, cards in groups.items():
+            logger.info("  %s: %s", name, [c['card_name'] for c in cards])
 
-        logger.info("🔍 After duplicate rank removal:")
-        logger.info(f"  Top zone: {[d['card_name'] for d in top_zone]}")
-        logger.info(f"  Middle zone: {[d['card_name'] for d in middle_zone]}")
-        logger.info(f"  Bottom zone: {[d['card_name'] for d in bottom_zone]}")
-        
-        # Second pass: Apply poker rules
-        # Player 1 - max 2 cards, highest confidence if more
-        if len(top_zone) > 2:
-            # Sort by confidence (descending) to keep the best detections
-            top_zone_sorted = sorted(top_zone, key=lambda x: x['confidence'], reverse=True)
-            kept_cards = top_zone_sorted[:2]
-            # Sort kept cards by X position for display
-            groups['player1'] = sorted(kept_cards, key=lambda x: x['center'][0])
-            # Extra cards go to community
-            for card in top_zone_sorted[2:]:
-                middle_zone.append(card)
-                logger.info(f"  Moved {card['card_name']} from player1 to community (excess, lower confidence)")
-        else:
-            groups['player1'] = sorted(top_zone, key=lambda x: x['center'][0])
-        
-        # Player 2 - max 2 cards, highest confidence if more
-        if len(bottom_zone) > 2:
-            # Sort by confidence (descending) to keep the best detections
-            bottom_zone_sorted = sorted(bottom_zone, key=lambda x: x['confidence'], reverse=True)
-            kept_cards = bottom_zone_sorted[:2]
-            # Sort kept cards by X position for display
-            groups['player2'] = sorted(kept_cards, key=lambda x: x['center'][0])
-            # Extra cards go to community
-            for card in bottom_zone_sorted[2:]:
-                middle_zone.append(card)
-                logger.info(f"  Moved {card['card_name']} from player2 to community (excess, lower confidence)")
-        else:
-            groups['player2'] = sorted(bottom_zone, key=lambda x: x['center'][0])
-        
-        # Community - max 5 cards, highest confidence if more
-        if len(middle_zone) > 5:
-            # FIXED: Keep 5 highest confidence cards instead of "most centered"
-            # The "centered" logic was keeping wrong cards (Qd, 3s) instead of correct ones (3c, 6h)
-            middle_zone_sorted = sorted(middle_zone, key=lambda x: x['confidence'], reverse=True)
-            kept_community = middle_zone_sorted[:5]
-            # Sort kept cards by X position for display
-            groups['community'] = sorted(kept_community, key=lambda x: x['center'][0])
-            logger.info(f"  Limited community to 5 highest confidence cards")
-            logger.info(f"    Kept: {[c['card_name'] for c in kept_community]}")
-            logger.info(f"    Removed: {[c['card_name'] for c in middle_zone_sorted[5:]]}")
-        else:
-            # Sort community cards by X position for display
-            groups['community'] = sorted(middle_zone, key=lambda x: x['center'][0])
-        
-        # Final logging
-        logger.info("🔧 Final card groups:")
-        total = 0
-        for group_name, cards in groups.items():
-            card_names = [c['card_name'] for c in cards]
-            logger.info(f"  {group_name}: {card_names} ({len(cards)} cards)")
-            total += len(cards)
-        logger.info(f"  Total: {total} cards")
-        
-        # Validate
+        # Validate (logs warnings on unusual counts)
         self._validate_card_groups(groups)
-        
+
+        return groups, layout_confidence
+
+    def _cluster_rows(self, detections: List[Dict], image_height: int):
+        """Cluster detections into up to MAX_ROWS rows by gaps between y-centers.
+
+        Returns (rows, boundary_gaps, within_gaps):
+          rows          -- rows ordered top to bottom, each a list of detections
+          boundary_gaps -- the vertical gaps chosen as row separators
+          within_gaps   -- the remaining (within-row) gaps
+        """
+        sorted_dets = sorted(detections, key=lambda d: d['center'][1])
+        ys = [d['center'][1] for d in sorted_dets]
+        n = len(ys)
+
+        if n <= 1:
+            return [sorted_dets], [], []
+
+        gaps = [ys[i + 1] - ys[i] for i in range(n - 1)]
+
+        # A gap separates two rows only if it is larger than a minimum fraction of
+        # the image height. This avoids splitting a single, slightly tilted row,
+        # while still adapting to wherever the rows actually sit.
+        min_gap = MIN_ROW_GAP_FRACTION * image_height
+        candidates = sorted(
+            (i for i in range(len(gaps)) if gaps[i] > min_gap),
+            key=lambda i: gaps[i], reverse=True,
+        )
+        boundary_idx = sorted(candidates[:MAX_ROWS - 1])  # at most 2 boundaries -> 3 rows
+
+        rows = []
+        start = 0
+        for b in boundary_idx:
+            rows.append(sorted_dets[start:b + 1])
+            start = b + 1
+        rows.append(sorted_dets[start:])
+
+        boundary_gaps = [gaps[i] for i in boundary_idx]
+        within_gaps = [gaps[i] for i in range(len(gaps)) if i not in boundary_idx]
+        return rows, boundary_gaps, within_gaps
+
+    def _assign_rows_to_groups(self, rows: List[List[Dict]], image_height: int) -> Dict:
+        """Identify the community and player rows from clustered rows (top to bottom)."""
+        groups = {'player1': [], 'community': [], 'player2': []}
+        if not rows:
+            return groups
+
+        middle_y = image_height / 2.0
+
+        def row_mean_y(row):
+            return sum(d['center'][1] for d in row) / len(row)
+
+        # The community is a row of 3+ cards (flop/turn/river) nearest the middle.
+        community_like = [i for i, row in enumerate(rows) if len(row) >= 3]
+        if community_like:
+            community_idx = min(
+                community_like, key=lambda i: abs(row_mean_y(rows[i]) - middle_y)
+            )
+            groups['community'] = rows[community_idx]
+            above = [i for i in range(len(rows)) if i < community_idx]
+            below = [i for i in range(len(rows)) if i > community_idx]
+            if above:
+                groups['player1'] = rows[above[-1]]   # nearest row above community
+            if below:
+                groups['player2'] = rows[below[0]]    # nearest row below community
+        else:
+            # No community row (e.g. preflop): the rows are players. Assign by
+            # vertical position -- topmost is player1, bottommost is player2.
+            groups['player1'] = rows[0]
+            if len(rows) >= 2:
+                groups['player2'] = rows[-1]
+
         return groups
+
+    @staticmethod
+    def _by_confidence(card: Dict):
+        """Sort key: highest confidence first, ties broken deterministically by x
+        position then card name so the result never depends on detection order."""
+        return (-card['confidence'], card['center'][0], card['card_name'])
+
+    def _filter_groups(self, raw_groups: Dict) -> Dict:
+        """Apply poker per-row limits + duplicate-rank removal, x-sorted for display."""
+        groups = {'player1': [], 'community': [], 'player2': []}
+
+        # Players: drop duplicate ranks, then keep the 2 highest-confidence cards.
+        for player in ('player1', 'player2'):
+            cards = self._dedupe_player_ranks(raw_groups[player], player)
+            cards = sorted(cards, key=self._by_confidence)[:2]
+            groups[player] = sorted(cards, key=lambda c: c['center'][0])
+
+        # Community: keep up to 5 highest-confidence cards (duplicate ranks allowed).
+        community = sorted(raw_groups['community'], key=self._by_confidence)[:5]
+        groups['community'] = sorted(community, key=lambda c: c['center'][0])
+
+        return groups
+
+    @staticmethod
+    def _card_rank(card_name: str) -> str:
+        """Rank of a card name with the trailing suit removed ('10c' -> '10', 'As' -> 'A')."""
+        return card_name[:-1] if len(card_name) > 1 else card_name
+
+    @staticmethod
+    def _dedupe_player_ranks(cards: List[Dict], zone_name: str = "") -> List[Dict]:
+        """Within a player row, keep only the highest-confidence card per rank.
+
+        Ties are broken deterministically (see _by_confidence) so the kept card
+        never depends on detection order.
+        """
+        if not cards:
+            return list(cards)
+
+        rank_map = {}
+        for card in cards:
+            rank_map.setdefault(PokerGameAnalyzer._card_rank(card['card_name']), []).append(card)
+
+        cleaned = []
+        for rank, same_rank in rank_map.items():
+            best = sorted(same_rank, key=PokerGameAnalyzer._by_confidence)[0]
+            cleaned.append(best)
+            if len(same_rank) > 1:
+                logger.info("  🔧 %s: kept %s for rank '%s', dropped %d duplicate(s)",
+                            zone_name, best['card_name'], rank, len(same_rank) - 1)
+        return cleaned
+
+    @staticmethod
+    def _compute_layout_confidence(boundary_gaps: List[float],
+                                   within_gaps: List[float]) -> float:
+        """How cleanly the rows separated, in [0, 1].
+
+        1.0 when there is a single row, or when the between-row gaps dwarf the
+        within-row spread. Lower as a within-row gap approaches the smallest
+        between-row gap (e.g. a card drifting between rows in a tilted photo).
+        """
+        if not boundary_gaps:
+            return 1.0
+        min_between = min(boundary_gaps)
+        if min_between <= 0:
+            return 0.0
+        max_within = max(within_gaps) if within_gaps else 0.0
+        ambiguity = min(max_within / min_between, 1.0)
+        return round(1.0 - ambiguity, 3)
 
     def _validate_card_groups(self, groups: Dict):
         """Validate that card groups make sense for poker"""
@@ -485,7 +519,8 @@ def analyze_poker_game(detections: List[Dict], image_shape: Tuple[int, int]) -> 
         'community_cards': [str(card) for card in game_state.community_cards],
         'players': [],
         'winner': None,
-        'tie': game_state.tie
+        'tie': game_state.tie,
+        'layout_confidence': game_state.layout_confidence
     }
     
     for player in game_state.players:

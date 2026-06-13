@@ -4,24 +4,17 @@ Unit tests for ml.hand_evaluator — the single source of truth for poker hand s
 Both /upload (via PokerGameAnalyzer) and /evaluate-winner rank hands through this
 module, so its correctness is what keeps the two paths in agreement.
 
-NOTE ON xfail TESTS
--------------------
-Writing these tests surfaced three real scoring bugs in the evaluator. By project
-decision they are fixed in a separate follow-up, so the cases that assert the
-*correct* poker behaviour are marked ``@pytest.mark.xfail(strict=True)``:
+REGRESSION TESTS
+----------------
+The final group guards three scoring bugs that were found while writing this suite
+and have since been fixed in _calculate_hand_strength / _evaluate_hand:
 
-  1. Flush overflow      — a flush outranks full house / quads / straight flush /
-                           royal flush (100**(4-i) multipliers in
-                           _calculate_hand_strength).
-  2. Wheel straight      — A-2-3-4-5 is scored as ace-high, so it ties Broadway
-                           and beats lower straights (and the steel-wheel SF).
-  3. One-pair kicker     — a high kicker can lift a lower pair above a higher pair.
-
-``strict=True`` means these tests will START FAILING (XPASS) once the evaluator is
-fixed — that is intentional: it's the signal to delete the xfail marker.
+  1. Flush overflow  — a flush used to outrank full house / quads / straight flush /
+                       royal flush (the 100**(4-i) multipliers overflowed).
+  2. Wheel straight  — A-2-3-4-5 was scored as ace-high, tying Broadway and beating
+                       lower straights (and the steel-wheel straight flush).
+  3. One-pair kicker — a high kicker could lift a lower pair above a higher pair.
 """
-
-import pytest
 
 from ml.hand_evaluator import create_hand_evaluator, HandRank
 
@@ -250,25 +243,22 @@ def test_compare_hands_returns_winner_and_tie():
 
 
 # ===========================================================================
-# KNOWN-BUG cases — asserting CORRECT poker. xfail(strict) until the evaluator
-# is fixed in the follow-up; they will XPASS (and fail the suite) once fixed.
+# Regression tests for the three scoring bugs (fixed in _calculate_hand_strength
+# / _evaluate_hand). These assert correct poker and must stay green.
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason="BUG: flush overflow — flush outranks full house")
 def test_flush_loses_to_full_house():
     flush = ['As', 'Ks', 'Qs', 'Js', '9s']
     full_house = ['2s', '2h', '2d', '3c', '3s']
     assert strength(flush) < strength(full_house)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: flush overflow — flush outranks royal flush")
 def test_flush_loses_to_royal_flush():
     flush = ['As', 'Ks', 'Qs', 'Js', '9s']
     royal = ['Th', 'Jh', 'Qh', 'Kh', 'Ah']
     assert strength(flush) < strength(royal)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: wheel scored as ace-high instead of 5-high")
 def test_wheel_is_lowest_straight():
     wheel = ['As', '2h', '3d', '4c', '5s']
     six_high = ['2h', '3d', '4c', '5s', '6h']
@@ -277,14 +267,12 @@ def test_wheel_is_lowest_straight():
     assert strength(broadway) > strength(wheel)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: steel-wheel straight flush scored as ace-high")
 def test_steel_wheel_is_lowest_straight_flush():
     steel_wheel = ['As', '2s', '3s', '4s', '5s']
     six_high_sf = ['2h', '3h', '4h', '5h', '6h']
     assert strength(six_high_sf) > strength(steel_wheel)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: one-pair kicker overflow — lower pair can outrank higher pair")
 def test_higher_pair_beats_lower_pair_regardless_of_kicker():
     aces_low_kickers = ['As', 'Ah', '4d', '3c', '2s']
     kings_high_kickers = ['Ks', 'Kh', 'Ad', 'Qc', 'Js']

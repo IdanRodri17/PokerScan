@@ -143,7 +143,7 @@ class PokerHand:
                 self.rank_details = {"high_card": max(ranks)}
             else:
                 self.hand_rank = HandRank.STRAIGHT_FLUSH
-                self.rank_details = {"high_card": max(ranks)}
+                self.rank_details = {"high_card": self._straight_high(ranks)}
         elif count_values[0] == 4:
             self.hand_rank = HandRank.FOUR_OF_A_KIND
             four_kind = [rank for rank, count in rank_counts.items() if count == 4][0]
@@ -159,7 +159,7 @@ class PokerHand:
             self.rank_details = {"high_cards": sorted(ranks, reverse=True)}
         elif is_straight:
             self.hand_rank = HandRank.STRAIGHT
-            self.rank_details = {"high_card": max(ranks)}
+            self.rank_details = {"high_card": self._straight_high(ranks)}
         elif count_values[0] == 3:
             self.hand_rank = HandRank.THREE_OF_A_KIND
             trips = [rank for rank, count in rank_counts.items() if count == 3][0]
@@ -198,43 +198,55 @@ class PokerHand:
             return True
         
         return False
-    
+
+    @staticmethod
+    def _straight_high(ranks: List[int]) -> int:
+        """High card of a straight, scoring A-2-3-4-5 (the wheel) as 5-high."""
+        if sorted(set(ranks)) == [2, 3, 4, 5, 14]:
+            return 5
+        return max(ranks)
+
+    def _tiebreakers(self) -> List[int]:
+        """Ordered tie-break ranks (most significant first) for this hand.
+
+        Within a category the winner is decided by comparing these values left to
+        right; every value is a card rank (2..14). _calculate_hand_strength packs
+        them into a single comparable integer.
+        """
+        details = self.rank_details
+        if self.hand_rank == HandRank.ROYAL_FLUSH:
+            return []
+        if self.hand_rank in (HandRank.STRAIGHT_FLUSH, HandRank.STRAIGHT):
+            return [details["high_card"]]
+        if self.hand_rank == HandRank.FOUR_OF_A_KIND:
+            return [details["four_kind"], details["kicker"]]
+        if self.hand_rank == HandRank.FULL_HOUSE:
+            return [details["trips"], details["pair"]]
+        if self.hand_rank == HandRank.FLUSH:
+            return list(details["high_cards"])
+        if self.hand_rank == HandRank.THREE_OF_A_KIND:
+            return [details["trips"], *details["kickers"]]
+        if self.hand_rank == HandRank.TWO_PAIR:
+            return [details["high_pair"], details["low_pair"], details["kicker"]]
+        if self.hand_rank == HandRank.ONE_PAIR:
+            return [details["pair"], *details["kickers"]]
+        return list(details["high_cards"])  # HIGH_CARD
+
     def _calculate_hand_strength(self) -> int:
         """Calculate numeric hand strength for comparison"""
-        # Base strength from hand rank (using much larger multiplier to ensure rank dominates)
-        strength = self.hand_rank.rank_value * 100000000  # 100 million per rank level
-
-        # Add details for tie-breaking (all tie-breakers are much smaller than rank difference)
-        if self.hand_rank == HandRank.ROYAL_FLUSH:
-            strength += 0  # All royal flushes are equal
-        elif self.hand_rank == HandRank.STRAIGHT_FLUSH:
-            strength += self.rank_details["high_card"] * 10000
-        elif self.hand_rank == HandRank.FOUR_OF_A_KIND:
-            strength += self.rank_details["four_kind"] * 10000 + self.rank_details["kicker"]
-        elif self.hand_rank == HandRank.FULL_HOUSE:
-            strength += self.rank_details["trips"] * 10000 + self.rank_details["pair"] * 100
-        elif self.hand_rank == HandRank.FLUSH:
-            for i, card_rank in enumerate(self.rank_details["high_cards"]):
-                strength += card_rank * (100 ** (4 - i))
-        elif self.hand_rank == HandRank.STRAIGHT:
-            strength += self.rank_details["high_card"] * 10000
-        elif self.hand_rank == HandRank.THREE_OF_A_KIND:
-            strength += self.rank_details["trips"] * 100000
-            for i, kicker in enumerate(self.rank_details["kickers"]):
-                strength += kicker * (100 ** (1 - i))
-        elif self.hand_rank == HandRank.TWO_PAIR:
-            strength += (self.rank_details["high_pair"] * 100000 +
-                        self.rank_details["low_pair"] * 1000 +
-                        self.rank_details["kicker"])
-        elif self.hand_rank == HandRank.ONE_PAIR:
-            strength += self.rank_details["pair"] * 100000
-            for i, kicker in enumerate(self.rank_details["kickers"]):
-                strength += kicker * (100 ** (2 - i))
-        else:  # High card
-            # Use smaller multipliers so high card values don't exceed rank differences
-            multipliers = [10000, 1000, 100, 10, 1]
-            for i, card_rank in enumerate(self.rank_details["high_cards"]):
-                strength += card_rank * multipliers[i]
+        # Overflow-safe positional encoding: the hand category always dominates,
+        # and no tie-break can bleed into a more-significant slot.
+        #   strength = rank_value * BASE**SLOTS + sum(t_i * BASE**(SLOTS - 1 - i))
+        # BASE (15) is larger than the top card rank (14) and there are SLOTS (5)
+        # tie-break positions, so the largest possible tie-break sum
+        # (BASE**SLOTS - 1) is still strictly smaller than one category step
+        # (BASE**SLOTS). This is what previously failed: a flush could outrank a
+        # royal flush, and a king-high pair an ace-high pair.
+        BASE = 15
+        SLOTS = 5
+        strength = self.hand_rank.rank_value * (BASE ** SLOTS)
+        for i, value in enumerate(self._tiebreakers()):
+            strength += value * (BASE ** (SLOTS - 1 - i))
 
         return strength
     

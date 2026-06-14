@@ -1,23 +1,28 @@
-name: CI/CD Pipeline
+name: CI
+
+# Tests what actually ships: the backend (pytest + the Docker image Hugging Face
+# builds) and the frontend (the static build Netlify produces). The old
+# docker-compose integration job was removed — that stack isn't how this project
+# deploys (HF Space + Netlify), and its Dockerfiles/ports had drifted out of sync.
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
   backend-test:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Python 3.11
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-    
+
     - name: Cache pip dependencies
       uses: actions/cache@v3
       with:
@@ -25,19 +30,19 @@ jobs:
         key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
-    
+
     - name: Install dependencies
       working-directory: ./backend
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
-    
+
     - name: Run backend tests
       working-directory: ./backend
       run: |
         python -m pytest --verbose || echo "No tests found - this is expected for initial setup"
-    
+
     - name: Test FastAPI app startup
       working-directory: ./backend
       run: |
@@ -46,106 +51,62 @@ jobs:
         sys.path.append('.')
         try:
             from main import app
-            print('✅ FastAPI app imports successfully')
+            print('FastAPI app imports successfully')
         except Exception as e:
-            print(f'❌ FastAPI app failed to import: {e}')
+            print(f'FastAPI app failed to import: {e}')
             sys.exit(1)
         "
 
   frontend-test:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Node.js 18
       uses: actions/setup-node@v4
       with:
         node-version: '18'
         cache: 'npm'
         cache-dependency-path: frontend/package-lock.json
-    
+
     - name: Install dependencies
       working-directory: ./frontend
       run: npm ci
-    
+
     - name: Run linting
       working-directory: ./frontend
       run: npm run lint || echo "Linting completed with warnings"
-    
+
     - name: Build frontend
       working-directory: ./frontend
       run: npm run build
-    
+
     - name: Test build artifacts
       working-directory: ./frontend
       run: |
         if [ -d "dist" ]; then
-          echo "✅ Build successful - dist directory created"
+          echo "Build successful - dist directory created"
           ls -la dist/
         else
-          echo "❌ Build failed - no dist directory found"
+          echo "Build failed - no dist directory found"
           exit 1
         fi
 
-  docker-build:
+  # Builds the backend image exactly as the Hugging Face Space does from
+  # backend/Dockerfile, so a Dockerfile break is caught here before it reaches
+  # the live Space.
+  backend-docker-build:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend-test]
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
-    
+
     - name: Build backend Docker image
       run: |
         docker build -t pokervision-backend:test ./backend
-        echo "✅ Backend Docker image built successfully"
-    
-    - name: Build frontend Docker image
-      run: |
-        docker build -t pokervision-frontend:test ./frontend
-        echo "✅ Frontend Docker image built successfully"
-    
-    - name: Test Docker Compose
-      run: |
-        # Test if docker-compose.yml is valid
-        docker-compose config
-        echo "✅ Docker Compose configuration is valid"
-        
-        # Quick test of service startup (without full run)
-        docker-compose up --no-start
-        echo "✅ Docker Compose services can be created"
-
-  integration-test:
-    runs-on: ubuntu-latest
-    needs: [docker-build]
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Start services
-      run: |
-        docker-compose up -d
-        echo "Services started, waiting for startup..."
-        sleep 30
-    
-    - name: Test backend health
-      run: |
-        curl -f http://localhost:8000/health || exit 1
-        echo "✅ Backend health check passed"
-    
-    - name: Test frontend availability
-      run: |
-        curl -f http://localhost:3000 || exit 1
-        echo "✅ Frontend is accessible"
-    
-    - name: Cleanup
-      if: always()
-      run: |
-        docker-compose down
-        docker-compose rm -f
+        echo "Backend Docker image built successfully"

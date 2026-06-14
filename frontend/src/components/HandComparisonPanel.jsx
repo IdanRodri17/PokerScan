@@ -12,6 +12,7 @@ const HandComparisonPanel = ({ gameAnalysis, showAnimation = true }) => {
   const handStrength = {
     'High Card': 1,
     'Pair': 2,
+    'One Pair': 2,
     'Two Pair': 3,
     'Three of a Kind': 4,
     'Straight': 5,

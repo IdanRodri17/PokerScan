@@ -6,24 +6,19 @@ Identifies players, community cards, and determines the winner
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
-from enum import Enum
 import logging
-from itertools import combinations
+
+from ml.hand_evaluator import create_hand_evaluator, PokerHand as EvaluatedHand
 
 logger = logging.getLogger(__name__)
 
-# Poker hand rankings
-class HandRank(Enum):
-    HIGH_CARD = 1
-    PAIR = 2
-    TWO_PAIR = 3
-    THREE_OF_A_KIND = 4
-    STRAIGHT = 5
-    FLUSH = 6
-    FULL_HOUSE = 7
-    FOUR_OF_A_KIND = 8
-    STRAIGHT_FLUSH = 9
-    ROYAL_FLUSH = 10
+# Adaptive row-clustering parameters
+MAX_ROWS = 3
+# A vertical gap must exceed this fraction of the image height to separate two
+# rows. This is a scale (minimum row separation), NOT a fixed band position:
+# rows are detected wherever the cards actually are.
+MIN_ROW_GAP_FRACTION = 0.08
+
 
 @dataclass
 class Card:
@@ -36,21 +31,12 @@ class Card:
         return f"{self.rank}{self.suit}"
 
 @dataclass
-class PokerHand:
-    """Represents a poker hand evaluation"""
-    rank: HandRank
-    rank_name: str
-    high_cards: List[int]  # For tiebreakers
-    cards: List[Card]
-    description: str
-    
-@dataclass
 class Player:
     """Represents a player with their cards"""
     id: int
     name: str
     hole_cards: List[Card]
-    best_hand: Optional[PokerHand] = None
+    best_hand: Optional[EvaluatedHand] = None  # ml.hand_evaluator.PokerHand
     position: str = ""  # "top", "bottom", etc.
 
 @dataclass
@@ -61,6 +47,7 @@ class GameState:
     winner: Optional[Player] = None
     tie: bool = False
     tied_players: List[Player] = None
+    layout_confidence: float = 1.0  # 0-1: how cleanly the card rows separated
 
 class PokerGameAnalyzer:
     """
@@ -68,19 +55,17 @@ class PokerGameAnalyzer:
     """
     
     def __init__(self):
-        # Card value mappings
+        # Card value mappings (used by _parse_card)
         self.rank_values = {
             'A': 14, 'K': 13, 'Q': 12, 'J': 11, '10': 10,
             '9': 9, '8': 8, '7': 7, '6': 6, '5': 5,
             '4': 4, '3': 3, '2': 2
         }
-        
-        # For ace-low straights
-        self.rank_values_ace_low = {
-            'A': 1, 'K': 13, 'Q': 12, 'J': 11, '10': 10,
-            '9': 9, '8': 8, '7': 7, '6': 6, '5': 5,
-            '4': 4, '3': 3, '2': 2
-        }
+
+        # Shared hand evaluator — the single source of truth for hand strength.
+        # Both this analyzer (/upload) and /evaluate-winner go through it, so the
+        # two paths can never disagree on hand ranking or the winner.
+        self.hand_evaluator = create_hand_evaluator()
     
     def analyze_game(self, detections: List[Dict], image_shape: Tuple[int, int]) -> GameState:
         """
@@ -93,12 +78,13 @@ class PokerGameAnalyzer:
         Returns:
             Complete GameState with winner determined
         """
-        # Step 1: Identify which cards belong to whom
-        grouped_cards = self._group_cards_by_position(detections, image_shape)
-        
+        # Step 1: Identify which cards belong to whom (adaptive row detection)
+        grouped_cards, layout_confidence = self._group_cards_by_position(detections, image_shape)
+
         # Step 2: Convert to Card objects
         game_state = self._create_game_state(grouped_cards)
-        
+        game_state.layout_confidence = layout_confidence
+
         # Step 3: Evaluate hands for each player
         for player in game_state.players:
             player.best_hand = self._evaluate_best_hand(
@@ -114,164 +100,187 @@ class PokerGameAnalyzer:
         
         return game_state
     
-    def _group_cards_by_position(self, detections: List[Dict], image_shape: Tuple[int, int]) -> Dict:
+    def _group_cards_by_position(self, detections: List[Dict],
+                                 image_shape: Tuple[int, int]) -> Tuple[Dict, float]:
         """
-        Improved grouping logic based on strict spatial zones
+        Group detected cards into player1 / community / player2 using adaptive
+        row detection instead of fixed vertical bands.
+
+        Cards are clustered into up to MAX_ROWS horizontal rows by the gaps
+        between their sorted y-centers, then identified by size and position: the
+        largest row (3-5 cards) nearest the vertical middle is the community, the
+        row above is one player and the row below the other. Handles 1, 2 and 3
+        rows (e.g. preflop has no community).
+
+        Returns the groups dict (same shape as before) and a layout_confidence in
+        [0, 1] describing how cleanly the rows separated. A low value means the
+        layout was ambiguous (a card drifting between rows) -- a good signal to
+        later ask the user for a clearer photo.
         """
         height, width = image_shape
-        
-        # Sort detections by Y position
-        sorted_by_y = sorted(detections, key=lambda x: x['center'][1])
-        
-        # Initialize groups
-        groups = {
-            'player1': [],
-            'community': [],
-            'player2': []
-        }
-        
-        # IMPROVED ZONE DEFINITIONS
-        # Based on your test results, we need stricter boundaries
-        TOP_ZONE_LIMIT = 0.20      # Top 20% for Player 1
-        MIDDLE_ZONE_START = 0.25   # Community starts at 25%
-        MIDDLE_ZONE_END = 0.70     # Community ends at 70%
-        BOTTOM_ZONE_START = 0.75   # Bottom 25% for Player 2
-        
-        # First pass: Rough grouping
-        top_zone = []
-        middle_zone = []
-        bottom_zone = []
-        
-        for det in sorted_by_y:
-            y = det['center'][1]
-            y_ratio = y / height
-            
-            if y_ratio <= TOP_ZONE_LIMIT:
-                top_zone.append(det)
-            elif y_ratio >= BOTTOM_ZONE_START:
-                bottom_zone.append(det)
-            elif MIDDLE_ZONE_START <= y_ratio <= MIDDLE_ZONE_END:
-                middle_zone.append(det)
-            else:
-                # Transition zones - assign based on nearest boundary
-                if y_ratio < MIDDLE_ZONE_START:
-                    # Between top and middle - check which is closer
-                    if y_ratio - TOP_ZONE_LIMIT < MIDDLE_ZONE_START - y_ratio:
-                        top_zone.append(det)
-                    else:
-                        middle_zone.append(det)
-                else:
-                    # Between middle and bottom
-                    if y_ratio - MIDDLE_ZONE_END < BOTTOM_ZONE_START - y_ratio:
-                        middle_zone.append(det)
-                    else:
-                        bottom_zone.append(det)
-        
-        # Debug logging
-        logger.info("🔍 Initial zone assignment:")
-        logger.info(f"  Top zone ({TOP_ZONE_LIMIT*100:.0f}%): {[d['card_name'] for d in top_zone]}")
-        logger.info(f"  Middle zone ({MIDDLE_ZONE_START*100:.0f}-{MIDDLE_ZONE_END*100:.0f}%): {[d['card_name'] for d in middle_zone]}")
-        logger.info(f"  Bottom zone ({BOTTOM_ZONE_START*100:.0f}%+): {[d['card_name'] for d in bottom_zone]}")
+        groups = {'player1': [], 'community': [], 'player2': []}
 
-        # CRITICAL FIX: Handle duplicate ranks within PLAYER zones only
-        # Players can have max 2 cards of different ranks
-        # If a player zone has 2 cards with same rank, keep highest confidence and remove the other
+        if not detections:
+            return groups, 1.0
 
-        def remove_duplicate_ranks_in_zone(zone_cards, zone_name):
-            """Remove duplicate ranks within a single zone, keeping highest confidence"""
-            if not zone_cards:
-                return zone_cards
+        # Step 1: cluster cards into rows by the vertical gaps between them
+        rows, boundary_gaps, within_gaps = self._cluster_rows(detections, height)
 
-            rank_map = {}  # rank -> list of cards with that rank
-            for card in zone_cards:
-                rank = card['card_name'][0]  # First char is rank (A, 2, K, etc.)
-                if rank not in rank_map:
-                    rank_map[rank] = []
-                rank_map[rank].append(card)
+        # Step 2: decide which row is community / player1 / player2
+        raw_groups = self._assign_rows_to_groups(rows, height)
 
-            # Build cleaned list - for each rank, keep only highest confidence
-            cleaned = []
-            for rank, cards_with_rank in rank_map.items():
-                if len(cards_with_rank) > 1:
-                    # Sort by confidence and keep best
-                    best_card = max(cards_with_rank, key=lambda x: x['confidence'])
-                    cleaned.append(best_card)
-                    logger.info(f"  🔧 {zone_name}: Found {len(cards_with_rank)} cards with rank '{rank}'")
-                    logger.info(f"     Keeping: {best_card['card_name']} ({best_card['confidence']:.3f})")
-                    for card in cards_with_rank:
-                        if card != best_card:
-                            logger.info(f"     Removing: {card['card_name']} ({card['confidence']:.3f}) - duplicate rank")
-                else:
-                    cleaned.append(cards_with_rank[0])
+        # Step 3: apply poker per-row limits + duplicate-rank removal
+        groups = self._filter_groups(raw_groups)
 
-            return cleaned
+        # Step 4: score how cleanly the rows separated
+        layout_confidence = self._compute_layout_confidence(boundary_gaps, within_gaps)
 
-        # Apply duplicate rank removal to player zones (not community - community can have duplicates legitimately)
-        top_zone = remove_duplicate_ranks_in_zone(top_zone, "Top zone")
-        bottom_zone = remove_duplicate_ranks_in_zone(bottom_zone, "Bottom zone")
+        logger.info("🔧 Adaptive grouping: %d row(s), layout_confidence=%.2f",
+                    len(rows), layout_confidence)
+        for name, cards in groups.items():
+            logger.info("  %s: %s", name, [c['card_name'] for c in cards])
 
-        logger.info("🔍 After duplicate rank removal:")
-        logger.info(f"  Top zone: {[d['card_name'] for d in top_zone]}")
-        logger.info(f"  Middle zone: {[d['card_name'] for d in middle_zone]}")
-        logger.info(f"  Bottom zone: {[d['card_name'] for d in bottom_zone]}")
-        
-        # Second pass: Apply poker rules
-        # Player 1 - max 2 cards, highest confidence if more
-        if len(top_zone) > 2:
-            # Sort by confidence (descending) to keep the best detections
-            top_zone_sorted = sorted(top_zone, key=lambda x: x['confidence'], reverse=True)
-            kept_cards = top_zone_sorted[:2]
-            # Sort kept cards by X position for display
-            groups['player1'] = sorted(kept_cards, key=lambda x: x['center'][0])
-            # Extra cards go to community
-            for card in top_zone_sorted[2:]:
-                middle_zone.append(card)
-                logger.info(f"  Moved {card['card_name']} from player1 to community (excess, lower confidence)")
-        else:
-            groups['player1'] = sorted(top_zone, key=lambda x: x['center'][0])
-        
-        # Player 2 - max 2 cards, highest confidence if more
-        if len(bottom_zone) > 2:
-            # Sort by confidence (descending) to keep the best detections
-            bottom_zone_sorted = sorted(bottom_zone, key=lambda x: x['confidence'], reverse=True)
-            kept_cards = bottom_zone_sorted[:2]
-            # Sort kept cards by X position for display
-            groups['player2'] = sorted(kept_cards, key=lambda x: x['center'][0])
-            # Extra cards go to community
-            for card in bottom_zone_sorted[2:]:
-                middle_zone.append(card)
-                logger.info(f"  Moved {card['card_name']} from player2 to community (excess, lower confidence)")
-        else:
-            groups['player2'] = sorted(bottom_zone, key=lambda x: x['center'][0])
-        
-        # Community - max 5 cards, highest confidence if more
-        if len(middle_zone) > 5:
-            # FIXED: Keep 5 highest confidence cards instead of "most centered"
-            # The "centered" logic was keeping wrong cards (Qd, 3s) instead of correct ones (3c, 6h)
-            middle_zone_sorted = sorted(middle_zone, key=lambda x: x['confidence'], reverse=True)
-            kept_community = middle_zone_sorted[:5]
-            # Sort kept cards by X position for display
-            groups['community'] = sorted(kept_community, key=lambda x: x['center'][0])
-            logger.info(f"  Limited community to 5 highest confidence cards")
-            logger.info(f"    Kept: {[c['card_name'] for c in kept_community]}")
-            logger.info(f"    Removed: {[c['card_name'] for c in middle_zone_sorted[5:]]}")
-        else:
-            # Sort community cards by X position for display
-            groups['community'] = sorted(middle_zone, key=lambda x: x['center'][0])
-        
-        # Final logging
-        logger.info("🔧 Final card groups:")
-        total = 0
-        for group_name, cards in groups.items():
-            card_names = [c['card_name'] for c in cards]
-            logger.info(f"  {group_name}: {card_names} ({len(cards)} cards)")
-            total += len(cards)
-        logger.info(f"  Total: {total} cards")
-        
-        # Validate
+        # Validate (logs warnings on unusual counts)
         self._validate_card_groups(groups)
-        
+
+        return groups, layout_confidence
+
+    def _cluster_rows(self, detections: List[Dict], image_height: int):
+        """Cluster detections into up to MAX_ROWS rows by gaps between y-centers.
+
+        Returns (rows, boundary_gaps, within_gaps):
+          rows          -- rows ordered top to bottom, each a list of detections
+          boundary_gaps -- the vertical gaps chosen as row separators
+          within_gaps   -- the remaining (within-row) gaps
+        """
+        sorted_dets = sorted(detections, key=lambda d: d['center'][1])
+        ys = [d['center'][1] for d in sorted_dets]
+        n = len(ys)
+
+        if n <= 1:
+            return [sorted_dets], [], []
+
+        gaps = [ys[i + 1] - ys[i] for i in range(n - 1)]
+
+        # A gap separates two rows only if it is larger than a minimum fraction of
+        # the image height. This avoids splitting a single, slightly tilted row,
+        # while still adapting to wherever the rows actually sit.
+        min_gap = MIN_ROW_GAP_FRACTION * image_height
+        candidates = sorted(
+            (i for i in range(len(gaps)) if gaps[i] > min_gap),
+            key=lambda i: gaps[i], reverse=True,
+        )
+        boundary_idx = sorted(candidates[:MAX_ROWS - 1])  # at most 2 boundaries -> 3 rows
+
+        rows = []
+        start = 0
+        for b in boundary_idx:
+            rows.append(sorted_dets[start:b + 1])
+            start = b + 1
+        rows.append(sorted_dets[start:])
+
+        boundary_gaps = [gaps[i] for i in boundary_idx]
+        within_gaps = [gaps[i] for i in range(len(gaps)) if i not in boundary_idx]
+        return rows, boundary_gaps, within_gaps
+
+    def _assign_rows_to_groups(self, rows: List[List[Dict]], image_height: int) -> Dict:
+        """Identify the community and player rows from clustered rows (top to bottom)."""
+        groups = {'player1': [], 'community': [], 'player2': []}
+        if not rows:
+            return groups
+
+        middle_y = image_height / 2.0
+
+        def row_mean_y(row):
+            return sum(d['center'][1] for d in row) / len(row)
+
+        # The community is a row of 3+ cards (flop/turn/river) nearest the middle.
+        community_like = [i for i, row in enumerate(rows) if len(row) >= 3]
+        if community_like:
+            community_idx = min(
+                community_like, key=lambda i: abs(row_mean_y(rows[i]) - middle_y)
+            )
+            groups['community'] = rows[community_idx]
+            above = [i for i in range(len(rows)) if i < community_idx]
+            below = [i for i in range(len(rows)) if i > community_idx]
+            if above:
+                groups['player1'] = rows[above[-1]]   # nearest row above community
+            if below:
+                groups['player2'] = rows[below[0]]    # nearest row below community
+        else:
+            # No community row (e.g. preflop): the rows are players. Assign by
+            # vertical position -- topmost is player1, bottommost is player2.
+            groups['player1'] = rows[0]
+            if len(rows) >= 2:
+                groups['player2'] = rows[-1]
+
         return groups
+
+    @staticmethod
+    def _by_confidence(card: Dict):
+        """Sort key: highest confidence first, ties broken deterministically by x
+        position then card name so the result never depends on detection order."""
+        return (-card['confidence'], card['center'][0], card['card_name'])
+
+    def _filter_groups(self, raw_groups: Dict) -> Dict:
+        """Apply poker per-row limits + duplicate-rank removal, x-sorted for display."""
+        groups = {'player1': [], 'community': [], 'player2': []}
+
+        # Players: drop duplicate ranks, then keep the 2 highest-confidence cards.
+        for player in ('player1', 'player2'):
+            cards = self._dedupe_player_cards(raw_groups[player], player)
+            cards = sorted(cards, key=self._by_confidence)[:2]
+            groups[player] = sorted(cards, key=lambda c: c['center'][0])
+
+        # Community: keep up to 5 highest-confidence cards (duplicate ranks allowed).
+        community = sorted(raw_groups['community'], key=self._by_confidence)[:5]
+        groups['community'] = sorted(community, key=lambda c: c['center'][0])
+
+        return groups
+
+    @staticmethod
+    def _dedupe_player_cards(cards: List[Dict], zone_name: str = "") -> List[Dict]:
+        """Within a player row, drop exact duplicate detections of the SAME card,
+        keeping the highest-confidence one.
+
+        Deduping by full card identity (rank + suit) -- not by rank -- preserves a
+        genuine pocket pair (e.g. As + Ah); only a repeated detection of one
+        physical card (e.g. As + As) is collapsed. Ties are broken deterministically
+        (see _by_confidence) so the result never depends on detection order.
+        """
+        if not cards:
+            return list(cards)
+
+        by_card = {}
+        for card in cards:
+            by_card.setdefault(card['card_name'].upper(), []).append(card)
+
+        cleaned = []
+        for card_name, duplicates in by_card.items():
+            best = sorted(duplicates, key=PokerGameAnalyzer._by_confidence)[0]
+            cleaned.append(best)
+            if len(duplicates) > 1:
+                logger.info("  🔧 %s: kept %s, dropped %d duplicate detection(s)",
+                            zone_name, best['card_name'], len(duplicates) - 1)
+        return cleaned
+
+    @staticmethod
+    def _compute_layout_confidence(boundary_gaps: List[float],
+                                   within_gaps: List[float]) -> float:
+        """How cleanly the rows separated, in [0, 1].
+
+        1.0 when there is a single row, or when the between-row gaps dwarf the
+        within-row spread. Lower as a within-row gap approaches the smallest
+        between-row gap (e.g. a card drifting between rows in a tilted photo).
+        """
+        if not boundary_gaps:
+            return 1.0
+        min_between = min(boundary_gaps)
+        if min_between <= 0:
+            return 0.0
+        max_within = max(within_gaps) if within_gaps else 0.0
+        ambiguity = min(max_within / min_between, 1.0)
+        return round(1.0 - ambiguity, 3)
 
     def _validate_card_groups(self, groups: Dict):
         """Validate that card groups make sense for poker"""
@@ -375,64 +384,6 @@ class PokerGameAnalyzer:
             
         return groups
     
-    def _validate_card_groups(self, groups: Dict):
-        """Validate that card groups make sense for poker"""
-        # Each player should have exactly 2 cards
-        for player in ['player1', 'player2']:
-            if len(groups[player]) != 2 and len(groups[player]) != 0:
-                logger.warning(f"{player} has {len(groups[player])} cards, expected 2 or 0")
-        
-        # Community should have 3-5 cards
-        if not (3 <= len(groups['community']) <= 5):
-            logger.warning(f"Community has {len(groups['community'])} cards, expected 3-5")
-    
-    def _create_game_state(self, grouped_cards: Dict) -> GameState:
-        """Create GameState from grouped cards"""
-        # Parse community cards
-        community_cards = []
-        for det in grouped_cards['community']:
-            card = self._parse_card(det['card_name'])
-            if card:
-                community_cards.append(card)
-        
-        # Create players
-        players = []
-        
-        # Player 1 (top)
-        if len(grouped_cards['player1']) >= 2:
-            player1_cards = []
-            for det in grouped_cards['player1'][:2]:
-                card = self._parse_card(det['card_name'])
-                if card:
-                    player1_cards.append(card)
-            
-            players.append(Player(
-                id=1,
-                name="Player 1 (Top)",
-                hole_cards=player1_cards,
-                position="top"
-            ))
-        
-        # Player 2 (bottom)
-        if len(grouped_cards['player2']) >= 2:
-            player2_cards = []
-            for det in grouped_cards['player2'][:2]:
-                card = self._parse_card(det['card_name'])
-                if card:
-                    player2_cards.append(card)
-            
-            players.append(Player(
-                id=2,
-                name="Player 2 (Bottom)",
-                hole_cards=player2_cards,
-                position="bottom"
-            ))
-        
-        return GameState(
-            community_cards=community_cards,
-            players=players
-        )
-    
     def _parse_card(self, card_str: str) -> Optional[Card]:
         """Parse card string into Card object - handles various formats"""
         if not card_str:
@@ -470,227 +421,40 @@ class PokerGameAnalyzer:
         logger.warning(f"Could not parse card: {card_str}")
         return None
     
-    def _evaluate_best_hand(self, hole_cards: List[Card], community_cards: List[Card]) -> PokerHand:
+    def _evaluate_best_hand(self, hole_cards: List[Card],
+                            community_cards: List[Card]) -> Optional[EvaluatedHand]:
         """
-        Evaluate the best possible poker hand from hole cards and community cards
+        Evaluate the best possible 5-card hand using the shared PokerHandEvaluator.
+
+        All hand-strength logic lives in ml.hand_evaluator (the single source of
+        truth), so this /upload path and the /evaluate-winner path can never
+        disagree on hand ranking. Returns None when fewer than 5 cards are
+        available (e.g. an incomplete board), which callers already treat as
+        "no hand".
         """
-        # Combine all available cards
-        all_cards = hole_cards + community_cards
-        
-        if len(all_cards) < 5:
-            return PokerHand(
-                rank=HandRank.HIGH_CARD,
-                rank_name="High Card",
-                high_cards=[max(card.value for card in all_cards)],
-                cards=all_cards,
-                description="Not enough cards for a full hand"
-            )
-        
-        # Generate all possible 5-card combinations
-        best_hand = None
-        
-        for combo in combinations(all_cards, 5):
-            hand = self._evaluate_five_cards(list(combo))
-            if best_hand is None or self._compare_hands(hand, best_hand) > 0:
-                best_hand = hand
-        
-        return best_hand
-    
-    def _evaluate_five_cards(self, cards: List[Card]) -> PokerHand:
-        """Evaluate exactly 5 cards"""
-        # Sort by value
-        cards.sort(key=lambda x: x.value, reverse=True)
-        
-        # Check for flush
-        is_flush = len(set(card.suit for card in cards)) == 1
-        
-        # Check for straight
-        is_straight = self._is_straight(cards)
-        is_straight_ace_low = self._is_straight_ace_low(cards)
-        
-        # Count ranks
-        rank_counts = {}
-        for card in cards:
-            rank_counts[card.rank] = rank_counts.get(card.rank, 0) + 1
-        
-        # Sort by count then value
-        sorted_ranks = sorted(rank_counts.items(), 
-                            key=lambda x: (x[1], self.rank_values[x[0]]), 
-                            reverse=True)
-        
-        # Determine hand rank
-        counts = [count for rank, count in sorted_ranks]
-        
-        # Royal Flush
-        if is_flush and is_straight and cards[0].value == 14:  # Ace high
-            return PokerHand(
-                rank=HandRank.ROYAL_FLUSH,
-                rank_name="Royal Flush",
-                high_cards=[14, 13, 12, 11, 10],
-                cards=cards,
-                description=f"Royal Flush in {cards[0].suit}"
-            )
-        
-        # Straight Flush
-        if is_flush and (is_straight or is_straight_ace_low):
-            high_card = cards[0].value if is_straight else 5  # Ace-low straight
-            return PokerHand(
-                rank=HandRank.STRAIGHT_FLUSH,
-                rank_name="Straight Flush",
-                high_cards=[high_card],
-                cards=cards,
-                description=f"Straight Flush, {cards[0].rank} high"
-            )
-        
-        # Four of a Kind
-        if counts == [4, 1]:
-            quads_rank = sorted_ranks[0][0]
-            kicker_rank = sorted_ranks[1][0]
-            return PokerHand(
-                rank=HandRank.FOUR_OF_A_KIND,
-                rank_name="Four of a Kind",
-                high_cards=[self.rank_values[quads_rank], self.rank_values[kicker_rank]],
-                cards=cards,
-                description=f"Four {quads_rank}s"
-            )
-        
-        # Full House
-        if counts == [3, 2]:
-            trips_rank = sorted_ranks[0][0]
-            pair_rank = sorted_ranks[1][0]
-            return PokerHand(
-                rank=HandRank.FULL_HOUSE,
-                rank_name="Full House",
-                high_cards=[self.rank_values[trips_rank], self.rank_values[pair_rank]],
-                cards=cards,
-                description=f"{trips_rank}s full of {pair_rank}s"
-            )
-        
-        # Flush
-        if is_flush:
-            return PokerHand(
-                rank=HandRank.FLUSH,
-                rank_name="Flush",
-                high_cards=[card.value for card in cards],
-                cards=cards,
-                description=f"Flush, {cards[0].rank} high"
-            )
-        
-        # Straight
-        if is_straight or is_straight_ace_low:
-            high_card = cards[0].value if is_straight else 5
-            return PokerHand(
-                rank=HandRank.STRAIGHT,
-                rank_name="Straight",
-                high_cards=[high_card],
-                cards=cards,
-                description=f"Straight, {'5' if is_straight_ace_low else cards[0].rank} high"
-            )
-        
-        # Three of a Kind
-        if counts == [3, 1, 1]:
-            trips_rank = sorted_ranks[0][0]
-            kickers = [self.rank_values[sorted_ranks[i][0]] for i in range(1, 3)]
-            return PokerHand(
-                rank=HandRank.THREE_OF_A_KIND,
-                rank_name="Three of a Kind",
-                high_cards=[self.rank_values[trips_rank]] + kickers,
-                cards=cards,
-                description=f"Three {trips_rank}s"
-            )
-        
-        # Two Pair
-        if counts == [2, 2, 1]:
-            pair1_rank = sorted_ranks[0][0]
-            pair2_rank = sorted_ranks[1][0]
-            kicker_rank = sorted_ranks[2][0]
-            return PokerHand(
-                rank=HandRank.TWO_PAIR,
-                rank_name="Two Pair",
-                high_cards=[self.rank_values[pair1_rank], 
-                          self.rank_values[pair2_rank], 
-                          self.rank_values[kicker_rank]],
-                cards=cards,
-                description=f"{pair1_rank}s and {pair2_rank}s"
-            )
-        
-        # Pair
-        if counts == [2, 1, 1, 1]:
-            pair_rank = sorted_ranks[0][0]
-            kickers = [self.rank_values[sorted_ranks[i][0]] for i in range(1, 4)]
-            return PokerHand(
-                rank=HandRank.PAIR,
-                rank_name="Pair",
-                high_cards=[self.rank_values[pair_rank]] + kickers,
-                cards=cards,
-                description=f"Pair of {pair_rank}s"
-            )
-        
-        # High Card
-        return PokerHand(
-            rank=HandRank.HIGH_CARD,
-            rank_name="High Card",
-            high_cards=[card.value for card in cards],
-            cards=cards,
-            description=f"{cards[0].rank} high"
-        )
-    
-    def _is_straight(self, cards: List[Card]) -> bool:
-        """Check if 5 cards form a straight"""
-        values = sorted([card.value for card in cards], reverse=True)
-        for i in range(len(values) - 1):
-            if values[i] - values[i + 1] != 1:
-                return False
-        return True
-    
-    def _is_straight_ace_low(self, cards: List[Card]) -> bool:
-        """Check for A-2-3-4-5 straight"""
-        ranks = [card.rank for card in cards]
-        return set(ranks) == {'A', '2', '3', '4', '5'}
-    
-    def _compare_hands(self, hand1: PokerHand, hand2: PokerHand) -> int:
-        """
-        Compare two poker hands
-        Returns: 1 if hand1 wins, -1 if hand2 wins, 0 if tie
-        """
-        # Compare hand ranks
-        if hand1.rank.value > hand2.rank.value:
-            return 1
-        elif hand1.rank.value < hand2.rank.value:
-            return -1
-        
-        # Same rank, compare high cards
-        for h1, h2 in zip(hand1.high_cards, hand2.high_cards):
-            if h1 > h2:
-                return 1
-            elif h1 < h2:
-                return -1
-        
-        return 0  # Tie
+        card_names = [str(card) for card in hole_cards] + [str(card) for card in community_cards]
+        return self.hand_evaluator.evaluate_best_hand(card_names)
     
     def _determine_winner(self, game_state: GameState) -> GameState:
-        """Determine the winner of the game"""
+        """Determine the winner by comparing each player's evaluated hand strength."""
         if len(game_state.players) < 2:
             logger.warning("Not enough players to determine winner")
             return game_state
-        
-        # Compare all players
+
+        # Compare all players by the evaluator's single comparable hand strength
         best_players = []
-        best_hand = None
-        
+        best_strength = None
+
         for player in game_state.players:
-            if player.best_hand:
-                if best_hand is None:
-                    best_players = [player]
-                    best_hand = player.best_hand
-                else:
-                    comparison = self._compare_hands(player.best_hand, best_hand)
-                    if comparison > 0:
-                        best_players = [player]
-                        best_hand = player.best_hand
-                    elif comparison == 0:
-                        best_players.append(player)
-        
+            if not player.best_hand:
+                continue
+            strength = player.best_hand.hand_strength
+            if best_strength is None or strength > best_strength:
+                best_players = [player]
+                best_strength = strength
+            elif strength == best_strength:
+                best_players.append(player)
+
         # Set winner(s)
         if len(best_players) == 1:
             game_state.winner = best_players[0]
@@ -718,19 +482,18 @@ class PokerGameAnalyzer:
             logger.info(f"{player.name}:")
             logger.info(f"  Hole Cards: {hole_cards_str}")
             if player.best_hand:
-                logger.info(f"  Best Hand: {player.best_hand.rank_name}")
-                logger.info(f"  Description: {player.best_hand.description}")
+                logger.info(f"  Best Hand: {player.best_hand.hand_rank.display_name}")
         
         logger.info("-" * 40)
         
         # Winner
         if game_state.winner:
             logger.info(f"🏆 WINNER: {game_state.winner.name}")
-            logger.info(f"   With: {game_state.winner.best_hand.description}")
+            logger.info(f"   With: {game_state.winner.best_hand.hand_rank.display_name}")
         elif game_state.tie:
             tied_names = ", ".join(p.name for p in game_state.tied_players)
             logger.info(f"🤝 TIE between: {tied_names}")
-            logger.info(f"   With: {game_state.tied_players[0].best_hand.description}")
+            logger.info(f"   With: {game_state.tied_players[0].best_hand.hand_rank.display_name}")
         
         logger.info("=" * 60)
 
@@ -754,7 +517,8 @@ def analyze_poker_game(detections: List[Dict], image_shape: Tuple[int, int]) -> 
         'community_cards': [str(card) for card in game_state.community_cards],
         'players': [],
         'winner': None,
-        'tie': game_state.tie
+        'tie': game_state.tie,
+        'layout_confidence': game_state.layout_confidence
     }
     
     for player in game_state.players:
@@ -763,8 +527,8 @@ def analyze_poker_game(detections: List[Dict], image_shape: Tuple[int, int]) -> 
             'name': player.name,
             'position': player.position,
             'hole_cards': [str(card) for card in player.hole_cards],
-            'best_hand': player.best_hand.rank_name if player.best_hand else None,
-            'hand_description': player.best_hand.description if player.best_hand else None
+            'best_hand': player.best_hand.hand_rank.display_name if player.best_hand else None,
+            'hand_description': player.best_hand.hand_rank.display_name if player.best_hand else None
         }
         result['players'].append(player_info)
     
@@ -772,7 +536,7 @@ def analyze_poker_game(detections: List[Dict], image_shape: Tuple[int, int]) -> 
         result['winner'] = {
             'id': game_state.winner.id,
             'name': game_state.winner.name,
-            'winning_hand': game_state.winner.best_hand.description
+            'winning_hand': game_state.winner.best_hand.hand_rank.display_name if game_state.winner.best_hand else "Unknown"
         }
     elif game_state.tied_players:
         result['tied_players'] = [

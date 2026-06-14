@@ -6,6 +6,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 // Lazy load components for better performance
 const PokerLandingPage = lazy(() => import('./components/PokerLandingPage'));
 const PokerResultsPage = lazy(() => import('./components/PokerResultsPage'));
+const RetakePrompt = lazy(() => import('./components/RetakePrompt'));
 
 // Loading component
 const LoadingSpinner = () => (
@@ -50,7 +51,13 @@ function App() {
       
       if (data.success) {
         setGameResults(data);
-        setCurrentView('results');
+        // Photo-quality gate: if the photo looks too hard to read, nudge a retake
+        // instead of jumping to a likely-wrong result (with an escape hatch).
+        if (data.photo_quality && data.photo_quality.ok === false) {
+          setCurrentView('retake');
+        } else {
+          setCurrentView('results');
+        }
       } else {
         throw new Error(data.message || 'Failed to analyze image');
       }
@@ -75,6 +82,11 @@ function App() {
     setGameResults(null);
     setOriginalImageURL(null);
     setError(null);
+  };
+
+  // Escape hatch from the retake gate: analyze the flagged photo anyway.
+  const handleAnalyzeAnyway = () => {
+    setCurrentView('results');
   };
 
   return (
@@ -111,6 +123,15 @@ function App() {
           <PokerLandingPage
             onImageUpload={handleImageUpload}
             isProcessing={isProcessing}
+          />
+        )}
+
+        {currentView === 'retake' && gameResults && (
+          <RetakePrompt
+            photoQuality={gameResults.photo_quality}
+            originalImage={originalImageURL}
+            onRetake={handleBackToUpload}
+            onAnalyzeAnyway={handleAnalyzeAnyway}
           />
         )}
 

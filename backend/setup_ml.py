@@ -134,7 +134,7 @@ def test_ml_components():
     
     try:
         from ml.card_detector import YOLOv8CardDetector
-        from ml.spatial_analyzer import PokerSpatialAnalyzer
+        from ml._unused.spatial_analyzer import PokerSpatialAnalyzer
         
         # Test card detector initialization
         detector = YOLOv8CardDetector()

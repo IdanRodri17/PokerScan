@@ -529,8 +529,8 @@ const PokerResultsPage = ({
                     <p>
                       <span className="text-yellow-400 font-bold">PokerVision</span> ends these disputes 
                       instantly! Just take a photo of your poker table, and our AI will analyze every 
-                      card, evaluate both hands using official poker rules, and declare the winner 
-                      with <span className="text-green-400 font-semibold">100% accuracy</span>.
+                      card, evaluate both hands using official poker rules, and declare the winner
+                      with <span className="text-green-400 font-semibold">AI-powered analysis</span>.
                     </p>
                   </motion.div>
                 </div>
@@ -567,7 +567,7 @@ const PokerResultsPage = ({
                         </li>
                       </ul>
                       <p className="text-sm text-gray-400 italic mt-4">
-                        💡 Keep cards clearly visible and well-lit for instant, accurate results!
+                        💡 Keep cards clearly visible and well-lit for the best results!
                       </p>
                     </div>
 
@@ -625,10 +625,11 @@ const PokerResultsPage = ({
                       <div className="text-xs text-gray-400">Cards Found</div>
                     </div>
                     <div className="text-center">
+                      {/* TODO: Replace with a real, measured accuracy number once we have benchmark data. */}
                       <div className="text-xl font-bold text-purple-400">
-                        100%
+                        AI
                       </div>
-                      <div className="text-xs text-gray-400">Accuracy</div>
+                      <div className="text-xs text-gray-400">Powered</div>
                     </div>
                   </div>
                 </motion.div>

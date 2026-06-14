@@ -15,7 +15,7 @@ from sklearn.preprocessing import StandardScaler
 from scipy.spatial.distance import pdist, squareform
 import yaml
 
-from .card_detector import CardDetection
+from ml.card_detector import CardDetection
 
 logger = logging.getLogger(__name__)
 

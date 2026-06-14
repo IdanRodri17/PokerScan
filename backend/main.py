@@ -6,12 +6,15 @@ import logging
 import os
 from datetime import datetime
 from io import BytesIO
+from PIL import Image, UnidentifiedImageError
 
 from models.schemas import (
     ImageUploadResponse, HealthCheckResponse, ErrorResponse, ModelStatusResponse,
-    EvaluateWinnerRequest, EvaluateWinnerResponse, GameAnalysis, PlayerInfo, WinnerInfo
+    EvaluateWinnerRequest, EvaluateWinnerResponse, GameAnalysis, PlayerInfo, WinnerInfo,
+    PhotoQuality
 )
 from services.image_processor import ImageProcessor
+from services.photo_quality import assess_photo_quality
 from ml.hand_evaluator import create_hand_evaluator
 
 # Configure logging
@@ -28,13 +31,23 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS - Allow Hugging Face, Netlify, and local development
-cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
-if cors_origins == ["*"]:
-    # Default: allow all origins (can be restricted later with environment variable)
-    allow_origins_setting = ["*"]
-else:
-    allow_origins_setting = cors_origins
+# Configure CORS. Allowed origins come from the comma-separated CORS_ORIGINS env
+# var; if unset we default to local dev + the deployed Netlify frontend.
+# NOTE: a wildcard "*" together with allow_credentials=True is rejected by
+# browsers (the CORS spec forbids credentialed requests when the server returns
+# Access-Control-Allow-Origin: "*"), so we never default to "*".
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",            # frontend dev (docker-compose)
+    "http://localhost:5173",            # frontend dev (Vite default)
+    "https://pokervision.netlify.app",  # deployed frontend
+]
+cors_env = os.getenv("CORS_ORIGINS", "")
+allow_origins_setting = [o.strip() for o in cors_env.split(",") if o.strip()] or DEFAULT_CORS_ORIGINS
+if "*" in allow_origins_setting:
+    logger.warning(
+        "CORS_ORIGINS contains '*', which browsers reject together with "
+        "allow_credentials=True. Set explicit origins instead."
+    )
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,6 +60,10 @@ app.add_middleware(
 # Initialize services
 image_processor = ImageProcessor()
 hand_evaluator = create_hand_evaluator()
+
+# Maximum accepted upload size (server-side guard; returns 413 if exceeded).
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 # Create visualizations directory if it doesn't exist
 os.makedirs("visualizations", exist_ok=True)
@@ -75,21 +92,32 @@ async def upload_image(
     Upload and process poker card image
     """
     try:
-        # Validate file type
-        if not file.content_type.startswith('image/'):
-            raise HTTPException(
-                status_code=400, 
-                detail="File must be an image"
-            )
-        
-        # Read file content
+        # Read the bytes first so we can enforce a server-side size limit.
         content = await file.read()
-        
-        # Validate image data
+
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Image is too large (max {MAX_UPLOAD_MB} MB)"
+            )
+
+        # content_type is unreliable from mobile clients (HEIC often arrives as
+        # application/octet-stream, or missing), so it is only a soft check -- the
+        # real gate is whether PIL can actually decode the bytes below.
+        content_type = (file.content_type or "").lower()
+        if content_type and not (
+            content_type.startswith("image/") or content_type == "application/octet-stream"
+        ):
+            raise HTTPException(status_code=400, detail="File must be an image")
+
+        # Reject unreadable images with a clear 400 (instead of a later 500).
         if not image_processor.validate_image(BytesIO(content)):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid image format"
+                detail="Uploaded file is not a readable image"
             )
         
         # Process the image with game analysis and optional visualization
@@ -99,7 +127,18 @@ async def upload_image(
             analyze_game=True,
             create_visualization=create_visualization
         )
-        
+
+        # Photo-quality gate: turn the detection signals into an "is this photo
+        # usable?" verdict so the UI can nudge a retake instead of a wrong result.
+        photo_quality = None
+        try:
+            img_w, img_h = Image.open(BytesIO(content)).size
+            layout_conf = game_analysis.get('layout_confidence') if game_analysis else None
+            photo_quality = assess_photo_quality(detection_results, (img_h, img_w), layout_conf)
+            logger.info(f"Photo quality: {photo_quality}")
+        except Exception as e:
+            logger.warning(f"Photo-quality assessment failed: {e}")
+
         # Extract simple card names for backward compatibility
         simple_card_names = []
         for section in detection_results:
@@ -177,11 +216,14 @@ async def upload_image(
             cards_detected=simple_card_names,  # Backward compatibility
             processing_time=processing_time,
             game_analysis=game_analysis_response,
-            visualization_path=visualization_path
+            visualization_path=visualization_path,
+            photo_quality=PhotoQuality(**photo_quality) if photo_quality else None
         )
         
     except HTTPException:
         raise
+    except UnidentifiedImageError:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a readable image")
     except Exception as e:
         logger.error(f"Upload failed: {str(e)}")
         raise HTTPException(
@@ -221,6 +263,17 @@ async def get_simple_model_status():
             "model_loaded": False,
             "using_mock_detection": True
         }
+
+@app.get("/version")
+async def get_version():
+    """App version, the loaded model file, and the device (for diagnostics)."""
+    status = image_processor.get_model_status()
+    return {
+        "version": app.version,
+        "model_file": status.get("model_file"),
+        "model_loaded": status.get("model_loaded", False),
+        "device": status.get("model_device", "unknown"),
+    }
 
 @app.post("/evaluate-winner", response_model=EvaluateWinnerResponse)
 async def evaluate_winner(request: EvaluateWinnerRequest):

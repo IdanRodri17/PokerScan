@@ -1,0 +1,5 @@
+# Real evaluation data is large and personal — keep it out of git.
+photos/
+# Generated per-dataset artifacts (regenerate by running the tools below).
+ground_truth.json
+report.md

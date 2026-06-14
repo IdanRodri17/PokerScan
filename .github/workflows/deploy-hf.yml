@@ -1,0 +1,61 @@
+name: Deploy backend to Hugging Face Space
+
+# Auto-syncs the serving code + model from this repo's backend/ to the Hugging Face
+# Space (Rodri17/PokerVision-backend) whenever you push to main and backend/ changed.
+# Pushing to the Space triggers its automatic rebuild, so the live demo updates.
+#
+# NOT synced (kept as the Space's own copies): Dockerfile, README.md (holds the Space
+# metadata), requirements.txt, Procfile, runtime.txt, setup_ml.py, .gitattributes.
+#   --> If you add a Python dependency, also add it to the Space's requirements.txt.
+#
+# One-time setup: create a Hugging Face *write* access token
+# (https://huggingface.co/settings/tokens) and add it to this repo as an Actions
+# secret named HF_TOKEN  (Settings -> Secrets and variables -> Actions -> New secret).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+  workflow_dispatch: {}   # also lets you run it by hand from the Actions tab
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Sync backend -> Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HF_TOKEN}" ]; then
+            echo "::error::HF_TOKEN secret is not set. Add a Hugging Face write token as a repo secret named HF_TOKEN."
+            exit 1
+          fi
+          git lfs install
+
+          # Clone the Space. Skip pulling its big LFS model files (we overwrite them).
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 \
+            "https://github-actions:${HF_TOKEN}@huggingface.co/spaces/Rodri17/PokerVision-backend" space
+
+          # --- Sync only the serving code + model (allowlist; HF infra files untouched) ---
+          cp backend/main.py space/main.py
+          rsync -a --delete --exclude='__pycache__'                     backend/models/   space/models/
+          rsync -a --delete --exclude='__pycache__'                     backend/services/ space/services/
+          rsync -a --delete --exclude='__pycache__' --exclude='_unused' backend/ml/       space/ml/
+
+          # --- Commit & push, but only if something actually changed ---
+          cd space
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No backend changes to deploy."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "Deploy from GitHub @ ${GITHUB_SHA:0:7}"
+          git push
+          echo "Pushed to the Space -> Hugging Face will rebuild automatically."

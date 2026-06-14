@@ -177,3 +177,9 @@ Thumbs.db
 
 # Uploads
 uploads/
+
+# Hugging Face Space deploy clone (a separate git repo; deployed to HF, not GitHub)
+backend/PokerVision-backend/
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json
